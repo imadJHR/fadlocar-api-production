@@ -44,7 +44,9 @@ io.on('connection', (socket) => {
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.get('/', (req, res) => {
+  res.send('<h1>Bienvenue sur mon API !</h1><p>Le serveur fonctionne.</p>');
+});
 // Serve static files from the 'uploads' directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
