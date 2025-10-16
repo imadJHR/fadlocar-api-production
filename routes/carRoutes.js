@@ -14,21 +14,20 @@ const {
 
 const router = express.Router();
 
-// --- Sanitize Filename Function ---
-// This function removes special characters to prevent URL encoding issues.
+// --- NOUVEAU : Fonction pour nettoyer les noms de fichiers ---
 const sanitizeFilename = (filename) => {
   return filename
-    .replace(/[^a-zA-Z0-9.\-_]/g, '_') // Replace invalid characters with an underscore
-    .replace(/_{2,}/g, '_');          // Replace multiple underscores with a single one
+    .replace(/[^a-zA-Z0-9.\-_]/g, '_') // Remplace les caractères non valides par un _
+    .replace(/_{2,}/g, '_');          // Remplace les multiples _ par un seul
 };
 
-// --- Updated Multer Storage Configuration ---
+// --- MISE À JOUR : Configuration de stockage Multer ---
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, 'uploads/');
   },
   filename: function (req, file, cb) {
-    // Sanitize the original filename before saving
+    // Utilise le nom de fichier nettoyé
     const sanitized = sanitizeFilename(file.originalname);
     cb(null, `${Date.now()}-${sanitized}`);
   },
@@ -36,21 +35,17 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// --- Define Routes ---
-
-// Public routes for fetching car data
+// --- Le reste de vos routes reste identique ---
 router.get('/related/:type/:currentCarSlug', getRelatedCars);
-router.get('/slug/:slug', getCarBySlug);
+router.get('/slug/:slug', getCarBySlug); 
 
-// Main routes for getting all cars and creating a new car
 router.route('/')
-  .get(getCars) // Public
-  .post(protect, upload.fields([{ name: 'thumbnail', maxCount: 1 }, { name: 'newImages', maxCount: 10 }]), createCar); // Protected
+  .get(getCars)
+  .post(protect, upload.fields([{ name: 'thumbnail', maxCount: 1 }, { name: 'newImages', maxCount: 10 }]), createCar);
 
-// Routes for a specific car by ID
 router.route('/:id')
-  .get(getCarById) // Public
-  .put(protect, upload.fields([{ name: 'thumbnail', maxCount: 1 }, { name: 'newImages', maxCount: 10 }]), updateCar) // Protected
-  .delete(protect, deleteCar); // Protected
+  .get(getCarById)
+  .put(protect, upload.fields([{ name: 'thumbnail', maxCount: 1 }, { name: 'newImages', maxCount: 10 }]), updateCar)
+  .delete(protect, deleteCar);
 
 module.exports = router;
