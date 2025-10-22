@@ -14,7 +14,7 @@ const slugify = (text) => text.toString().toLowerCase()
 // @route   POST /api/cars
 exports.createCar = async (req, res) => {
   try {
-    const { name, brand,rating ,reviews , available,featured , type, price, description, seats, fuel, transmission, year, features } = req.body;
+    const { name, brand, rating, reviews, available, featured, type, price, description, seats, fuel, transmission } = req.body;
 
     const carData = {
       name,
@@ -25,27 +25,25 @@ exports.createCar = async (req, res) => {
       description,
       rating: Number(rating) || 5.0,
       reviews: Number(reviews) || 0,
-      slug: slugify(`${brand}-${name}-${year}`),
+      slug: slugify(`${brand}-${name}`),
       specs: {
         seats: Number(seats),
         fuel,
         transmission,
-        year: Number(year),
       },
-      features: (features && features.trim() !== '') ? features.split(',').map(item => item.trim()) : [],
-       featured: featured === 'true' || featured === true,
+      // Removed: features field
+      featured: featured === 'true' || featured === true,
     };
 
     if (req.files) {
       if (req.files.thumbnail) {
         carData.thumbnail = req.files.thumbnail[0].path;
       }
-      // --- FIX: Add a check to prevent crash if no images are uploaded ---
-      if (req.files.newImages && Array.isArray(req.files.newImages)) { 
+      if (req.files.newImages && Array.isArray(req.files.newImages)) {
         carData.images = req.files.newImages.map(file => file.path);
       }
     }
-    
+
     const car = await Car.create(carData);
     res.status(201).json(car);
   } catch (error) {
@@ -97,105 +95,108 @@ exports.getCarById = async (req, res) => {
 // @desc    Update a car
 // @route   PUT /api/cars/:id
 exports.updateCar = async (req, res) => {
-    try {
-        const car = await Car.findById(req.params.id);
-        if (!car) {
-            return res.status(404).json({ message: 'Car not found' });
-        }
-        
-        const { name, brand, type, price, description, featured ,seats, fuel, transmission, year, features, available, imagesToDelete ,rating, reviews } = req.body;
-        car.rating = Number(rating) || car.rating;
-        car.reviews = Number(reviews) || car.reviews;
-        car.name = name || car.name;
-        car.brand = brand || car.brand;
-        car.type = type || car.type;
-        car.price = Number(price) || car.price;
-        car.description = description || car.description;
-        car.slug = slugify(`${car.brand}-${car.name}-${car.year}`);
-        car.specs.seats = Number(seats) || car.specs.seats;
-        car.specs.fuel = fuel || car.specs.fuel;
-        car.specs.transmission = transmission || car.specs.transmission;
-        car.specs.year = Number(year) || car.specs.year;
-        
-        // Correctly handle features for update as well
-        car.features = (features && features.trim() !== '') ? features.split(',').map(item => item.trim()) : [];
-        
-        if (available !== undefined) {
-            car.available = available === 'true' || available === true;
-        }
-         if (featured !== undefined) {
-            car.featured = featured === 'true' || featured === true;
-        }
-
-        if (imagesToDelete) {
-            const imagesToDeleteArray = Array.isArray(imagesToDelete) ? imagesToDelete : [imagesToDelete];
-            car.images = car.images.filter(img => !imagesToDeleteArray.includes(img));
-            imagesToDeleteArray.forEach(filePath => {
-                if (filePath) {
-                    fs.unlink(path.join(__dirname, '..', filePath), (err) => {
-                        if (err) console.error(`Failed to delete file: ${filePath}`, err);
-                    });
-                }
-            });
-        }
-        
-        if (req.files) {
-            if (req.files.thumbnail) {
-                if (car.thumbnail) {
-                     fs.unlink(path.join(__dirname, '..', car.thumbnail), err => {
-                        if (err) console.error(`Failed to delete old thumbnail: ${car.thumbnail}`, err);
-                     });
-                }
-                car.thumbnail = req.files.thumbnail[0].path;
-            }
-            if (req.files.newImages) {
-                const newImagePaths = req.files.newImages.map(file => file.path);
-                car.images.push(...newImagePaths);
-            }
-        }
-
-        const updatedCar = await car.save();
-        res.status(200).json(updatedCar);
-    } catch (error) {
-        console.error('UPDATE CAR ERROR:', error);
-        res.status(500).json({ message: 'Error updating car', error: error.message });
+  try {
+    const car = await Car.findById(req.params.id);
+    if (!car) {
+      return res.status(404).json({ message: 'Car not found' });
     }
+
+    const { name, brand, type, price, description, featured, seats, fuel, transmission, available, imagesToDelete, rating, reviews } = req.body;
+    
+    car.rating = Number(rating) || car.rating;
+    car.reviews = Number(reviews) || car.reviews;
+    car.name = name || car.name;
+    car.brand = brand || car.brand;
+    car.type = type || car.type;
+    car.price = Number(price) || car.price;
+    car.description = description || car.description;
+    car.slug = slugify(`${car.brand}-${car.name}`);
+    
+    car.specs.seats = Number(seats) || car.specs.seats;
+    car.specs.fuel = fuel || car.specs.fuel;
+    car.specs.transmission = transmission || car.specs.transmission;
+    
+    // Removed: features field handling
+
+    if (available !== undefined) {
+      car.available = available === 'true' || available === true;
+    }
+    if (featured !== undefined) {
+      car.featured = featured === 'true' || featured === true;
+    }
+
+    if (imagesToDelete) {
+      const imagesToDeleteArray = Array.isArray(imagesToDelete) ? imagesToDelete : [imagesToDelete];
+      car.images = car.images.filter(img => !imagesToDeleteArray.includes(img));
+      imagesToDeleteArray.forEach(filePath => {
+        if (filePath) {
+          fs.unlink(path.join(__dirname, '..', filePath), (err) => {
+            if (err) console.error(`Failed to delete file: ${filePath}`, err);
+          });
+        }
+      });
+    }
+
+    if (req.files) {
+      if (req.files.thumbnail) {
+        if (car.thumbnail) {
+          fs.unlink(path.join(__dirname, '..', car.thumbnail), err => {
+            if (err) console.error(`Failed to delete old thumbnail: ${car.thumbnail}`, err);
+          });
+        }
+        car.thumbnail = req.files.thumbnail[0].path;
+      }
+      if (req.files.newImages) {
+        const newImagePaths = req.files.newImages.map(file => file.path);
+        car.images.push(...newImagePaths);
+      }
+    }
+
+    const updatedCar = await car.save();
+    res.status(200).json(updatedCar);
+  } catch (error) {
+    console.error('UPDATE CAR ERROR:', error);
+    res.status(500).json({ message: 'Error updating car', error: error.message });
+  }
 };
 
 // @desc    Delete a car
 // @route   DELETE /api/cars/:id
 exports.deleteCar = async (req, res) => {
-    try {
-        const car = await Car.findById(req.params.id);
-        if (!car) {
-            return res.status(440).json({ message: 'Car not found' });
-        }
-
-        const filesToDelete = car.thumbnail ? [car.thumbnail, ...car.images] : [...car.images];
-        
-        filesToDelete.forEach(filePath => {
-            if (filePath) {
-                fs.unlink(path.join(__dirname, '..', filePath), (err) => {
-                    if (err) console.error(`Failed to delete file on car removal: ${filePath}`, err);
-                });
-            }
-        });
-
-        await car.deleteOne();
-        res.status(200).json({ message: 'Car removed' });
-    } catch (error) {
-        console.error('DELETE CAR ERROR:', error);
-        res.status(500).json({ message: 'Server Error', error: error.message });
+  try {
+    const car = await Car.findById(req.params.id);
+    if (!car) {
+      return res.status(404).json({ message: 'Car not found' });
     }
+
+    const filesToDelete = car.thumbnail ? [car.thumbnail, ...car.images] : [...car.images];
+
+    filesToDelete.forEach(filePath => {
+      if (filePath) {
+        fs.unlink(path.join(__dirname, '..', filePath), (err) => {
+          if (err) console.error(`Failed to delete file on car removal: ${filePath}`, err);
+        });
+      }
+    });
+
+    await car.deleteOne();
+    res.status(200).json({ message: 'Car removed' });
+  } catch (error) {
+    console.error('DELETE CAR ERROR:', error);
+    res.status(500).json({ message: 'Server Error', error: error.message });
+  }
 };
+
+// @desc    Get related cars
+// @route   GET /api/cars/related/:type/:currentCarSlug
 exports.getRelatedCars = async (req, res) => {
   try {
     const { type, currentCarSlug } = req.params;
-    
+
     const cars = await Car.find({
-      type: type, // Find cars with the same type
-      slug: { $ne: currentCarSlug } // Exclude the current car using its slug ($ne = not equal)
-    }).limit(3); // Limit the results to 3 cars
+      type: type,
+      slug: { $ne: currentCarSlug }
+    }).limit(3);
 
     res.status(200).json(cars);
   } catch (error) {

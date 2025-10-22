@@ -16,9 +16,9 @@ const carSchema = new mongoose.Schema({
     seats: { type: Number, default: 5 },
     fuel: { type: String, default: 'Petrol' },
     transmission: { type: String, default: 'Automatic' },
-    year: { type: Number, required: true },
+    // Removed: year: { type: Number, required: true },
   },
-  features: [{ type: String, trim: true }],
+  // Removed: features: [{ type: String, trim: true }],
   featured: { type: Boolean, default: false },
 }, {
   timestamps: true,
