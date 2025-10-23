@@ -2,7 +2,7 @@ const Car = require('../models/Car');
 const fs = require('fs');
 const path = require('path');
 
-// Helper function to create a URL-friendly slug
+// Helper pour le slug
 const slugify = (text) => text.toString().toLowerCase()
   .replace(/\s+/g, '-')
   .replace(/[^\w\-]+/g, '')
@@ -10,10 +10,11 @@ const slugify = (text) => text.toString().toLowerCase()
   .replace(/^-+/, '')
   .replace(/-+$/, '');
 
-// @desc    Create a new car
+// @desc    Créer une nouvelle voiture
 // @route   POST /api/cars
 exports.createCar = async (req, res) => {
   try {
+    // 'year' et 'features' ont été retirés
     const { name, brand, rating, reviews, available, featured, type, price, description, seats, fuel, transmission } = req.body;
 
     const carData = {
@@ -25,34 +26,34 @@ exports.createCar = async (req, res) => {
       description,
       rating: Number(rating) || 5.0,
       reviews: Number(reviews) || 0,
+      // Le slug n'utilise plus l'année
       slug: slugify(`${brand}-${name}`),
       specs: {
         seats: Number(seats),
         fuel,
         transmission,
       },
-      // Removed: features field
       featured: featured === 'true' || featured === true,
     };
 
     if (req.files) {
-      if (req.files.thumbnail) {
-        carData.thumbnail = req.files.thumbnail[0].path;
-      }
-      if (req.files.newImages && Array.isArray(req.files.newImages)) {
-        carData.images = req.files.newImages.map(file => file.path);
-      }
+      if (req.files.thumbnail) carData.thumbnail = req.files.thumbnail[0].path;
+      if (req.files.newImages) carData.images = req.files.newImages.map(file => file.path);
     }
-
+    
     const car = await Car.create(carData);
     res.status(201).json(car);
   } catch (error) {
     console.error('CREATE CAR ERROR:', error);
+    // Gérer l'erreur de clé dupliquée pour le slug
+    if (error.code === 11000) {
+        return res.status(400).json({ message: 'Error: A car with this name and brand already exists. Please use a unique name.' });
+    }
     res.status(500).json({ message: 'Error creating car', error: error.message });
   }
 };
 
-// @desc    Get all cars
+// @desc    Obtenir toutes les voitures
 // @route   GET /api/cars
 exports.getCars = async (req, res) => {
   try {
@@ -63,7 +64,7 @@ exports.getCars = async (req, res) => {
   }
 };
 
-// @desc    Get a single car by Slug
+// @desc    Obtenir une voiture par Slug
 // @route   GET /api/cars/slug/:slug
 exports.getCarBySlug = async (req, res) => {
   try {
@@ -78,7 +79,7 @@ exports.getCarBySlug = async (req, res) => {
   }
 };
 
-// @desc    Get a single car by ID
+// @desc    Obtenir une voiture par ID
 // @route   GET /api/cars/:id
 exports.getCarById = async (req, res) => {
   try {
@@ -92,39 +93,35 @@ exports.getCarById = async (req, res) => {
   }
 };
 
-// @desc    Update a car
+// @desc    Mettre à jour une voiture
 // @route   PUT /api/cars/:id
 exports.updateCar = async (req, res) => {
   try {
     const car = await Car.findById(req.params.id);
-    if (!car) {
-      return res.status(404).json({ message: 'Car not found' });
-    }
+    if (!car) return res.status(404).json({ message: 'Car not found' });
 
+    // 'year' et 'features' ont été retirés
     const { name, brand, type, price, description, featured, seats, fuel, transmission, available, imagesToDelete, rating, reviews } = req.body;
-    
-    car.rating = Number(rating) || car.rating;
-    car.reviews = Number(reviews) || car.reviews;
+
     car.name = name || car.name;
     car.brand = brand || car.brand;
     car.type = type || car.type;
     car.price = Number(price) || car.price;
     car.description = description || car.description;
-    car.slug = slugify(`${car.brand}-${car.name}`);
+    car.rating = Number(rating) || car.rating;
+    car.reviews = Number(reviews) || car.reviews;
     
     car.specs.seats = Number(seats) || car.specs.seats;
     car.specs.fuel = fuel || car.specs.fuel;
     car.specs.transmission = transmission || car.specs.transmission;
     
-    // Removed: features field handling
+    // Le slug n'utilise plus l'année
+    car.slug = slugify(`${car.brand}-${car.name}`);
 
-    if (available !== undefined) {
-      car.available = available === 'true' || available === true;
-    }
-    if (featured !== undefined) {
-      car.featured = featured === 'true' || featured === true;
-    }
+    if (available !== undefined) car.available = available === 'true';
+    if (featured !== undefined) car.featured = featured === 'true';
 
+    // Gestion de la suppression d'images
     if (imagesToDelete) {
       const imagesToDeleteArray = Array.isArray(imagesToDelete) ? imagesToDelete : [imagesToDelete];
       car.images = car.images.filter(img => !imagesToDeleteArray.includes(img));
@@ -137,6 +134,7 @@ exports.updateCar = async (req, res) => {
       });
     }
 
+    // Gestion des nouveaux téléversements d'images
     if (req.files) {
       if (req.files.thumbnail) {
         if (car.thumbnail) {
@@ -151,16 +149,19 @@ exports.updateCar = async (req, res) => {
         car.images.push(...newImagePaths);
       }
     }
-
+    
     const updatedCar = await car.save();
     res.status(200).json(updatedCar);
   } catch (error) {
     console.error('UPDATE CAR ERROR:', error);
+    if (error.code === 11000) {
+        return res.status(400).json({ message: 'Error: A car with this name and brand already exists. Please use a unique name.' });
+    }
     res.status(500).json({ message: 'Error updating car', error: error.message });
   }
 };
 
-// @desc    Delete a car
+// @desc    Supprimer une voiture
 // @route   DELETE /api/cars/:id
 exports.deleteCar = async (req, res) => {
   try {
@@ -187,17 +188,15 @@ exports.deleteCar = async (req, res) => {
   }
 };
 
-// @desc    Get related cars
+// @desc    Obtenir les voitures similaires
 // @route   GET /api/cars/related/:type/:currentCarSlug
 exports.getRelatedCars = async (req, res) => {
   try {
     const { type, currentCarSlug } = req.params;
-
     const cars = await Car.find({
       type: type,
       slug: { $ne: currentCarSlug }
     }).limit(3);
-
     res.status(200).json(cars);
   } catch (error) {
     res.status(500).json({ message: 'Server Error', error: error.message });
