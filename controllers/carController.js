@@ -2,7 +2,6 @@ const Car = require('../models/Car');
 const fs = require('fs');
 const path = require('path');
 
-// Helper pour le slug
 const slugify = (text) => text.toString().toLowerCase()
   .replace(/\s+/g, '-')
   .replace(/[^\w\-]+/g, '')
@@ -11,7 +10,6 @@ const slugify = (text) => text.toString().toLowerCase()
   .replace(/-+$/, '');
 
 // @desc    Créer une nouvelle voiture
-// @route   POST /api/cars
 exports.createCar = async (req, res) => {
   try {
     // 'year' et 'features' ont été retirés
@@ -20,20 +18,19 @@ exports.createCar = async (req, res) => {
     const carData = {
       name,
       brand,
-      available: available === 'true' || available === true,
+      available: available === 'true',
       type,
       price: Number(price),
       description,
       rating: Number(rating) || 5.0,
       reviews: Number(reviews) || 0,
-      // Le slug n'utilise plus l'année
       slug: slugify(`${brand}-${name}`),
       specs: {
         seats: Number(seats),
         fuel,
         transmission,
       },
-      featured: featured === 'true' || featured === true,
+      featured: featured === 'true',
     };
 
     if (req.files) {
@@ -45,16 +42,14 @@ exports.createCar = async (req, res) => {
     res.status(201).json(car);
   } catch (error) {
     console.error('CREATE CAR ERROR:', error);
-    // Gérer l'erreur de clé dupliquée pour le slug
     if (error.code === 11000) {
-        return res.status(400).json({ message: 'Error: A car with this name and brand already exists. Please use a unique name.' });
+        return res.status(400).json({ message: 'Erreur : Une voiture avec ce nom et cette marque existe déjà. Le nom doit être unique.' });
     }
-    res.status(500).json({ message: 'Error creating car', error: error.message });
+    res.status(500).json({ message: 'Erreur lors de la création de la voiture', error: error.message });
   }
 };
 
 // @desc    Obtenir toutes les voitures
-// @route   GET /api/cars
 exports.getCars = async (req, res) => {
   try {
     const cars = await Car.find({});
@@ -65,14 +60,13 @@ exports.getCars = async (req, res) => {
 };
 
 // @desc    Obtenir une voiture par Slug
-// @route   GET /api/cars/slug/:slug
 exports.getCarBySlug = async (req, res) => {
   try {
     const car = await Car.findOne({ slug: req.params.slug });
     if (car) {
       res.status(200).json(car);
     } else {
-      res.status(404).json({ message: 'Car not found with that slug' });
+      res.status(404).json({ message: 'Voiture non trouvée avec ce slug' });
     }
   } catch (error) {
     res.status(500).json({ message: 'Server Error', error: error.message });
@@ -80,12 +74,11 @@ exports.getCarBySlug = async (req, res) => {
 };
 
 // @desc    Obtenir une voiture par ID
-// @route   GET /api/cars/:id
 exports.getCarById = async (req, res) => {
   try {
     const car = await Car.findById(req.params.id);
     if (!car) {
-      return res.status(404).json({ message: 'Car not found' });
+      return res.status(404).json({ message: 'Voiture non trouvée' });
     }
     res.status(200).json(car);
   } catch (error) {
@@ -94,11 +87,10 @@ exports.getCarById = async (req, res) => {
 };
 
 // @desc    Mettre à jour une voiture
-// @route   PUT /api/cars/:id
 exports.updateCar = async (req, res) => {
   try {
     const car = await Car.findById(req.params.id);
-    if (!car) return res.status(404).json({ message: 'Car not found' });
+    if (!car) return res.status(404).json({ message: 'Voiture non trouvée' });
 
     // 'year' et 'features' ont été retirés
     const { name, brand, type, price, description, featured, seats, fuel, transmission, available, imagesToDelete, rating, reviews } = req.body;
@@ -115,7 +107,6 @@ exports.updateCar = async (req, res) => {
     car.specs.fuel = fuel || car.specs.fuel;
     car.specs.transmission = transmission || car.specs.transmission;
     
-    // Le slug n'utilise plus l'année
     car.slug = slugify(`${car.brand}-${car.name}`);
 
     if (available !== undefined) car.available = available === 'true';
@@ -155,23 +146,20 @@ exports.updateCar = async (req, res) => {
   } catch (error) {
     console.error('UPDATE CAR ERROR:', error);
     if (error.code === 11000) {
-        return res.status(400).json({ message: 'Error: A car with this name and brand already exists. Please use a unique name.' });
+        return res.status(400).json({ message: 'Erreur : Une voiture avec ce nom et cette marque existe déjà.' });
     }
     res.status(500).json({ message: 'Error updating car', error: error.message });
   }
 };
 
 // @desc    Supprimer une voiture
-// @route   DELETE /api/cars/:id
 exports.deleteCar = async (req, res) => {
   try {
     const car = await Car.findById(req.params.id);
     if (!car) {
-      return res.status(404).json({ message: 'Car not found' });
+      return res.status(404).json({ message: 'Voiture non trouvée' });
     }
-
     const filesToDelete = car.thumbnail ? [car.thumbnail, ...car.images] : [...car.images];
-
     filesToDelete.forEach(filePath => {
       if (filePath) {
         fs.unlink(path.join(__dirname, '..', filePath), (err) => {
@@ -179,9 +167,8 @@ exports.deleteCar = async (req, res) => {
         });
       }
     });
-
     await car.deleteOne();
-    res.status(200).json({ message: 'Car removed' });
+    res.status(200).json({ message: 'Voiture supprimée' });
   } catch (error) {
     console.error('DELETE CAR ERROR:', error);
     res.status(500).json({ message: 'Server Error', error: error.message });
@@ -189,7 +176,6 @@ exports.deleteCar = async (req, res) => {
 };
 
 // @desc    Obtenir les voitures similaires
-// @route   GET /api/cars/related/:type/:currentCarSlug
 exports.getRelatedCars = async (req, res) => {
   try {
     const { type, currentCarSlug } = req.params;
