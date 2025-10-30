@@ -12,50 +12,96 @@ const slugify = (text) => text.toString().toLowerCase()
 // @desc    Créer une nouvelle voiture
 exports.createCar = async (req, res) => {
   try {
-    // 'year' et 'features' ont été retirés
-    const { name, brand, rating, reviews, available, featured, type, price, description, seats, fuel, transmission } = req.body;
+    console.log('Request body:', req.body);
+    console.log('Request files:', req.files);
 
+    // Parse specs from body or individual fields
+    const { 
+      name, 
+      brand, 
+      rating, 
+      reviews, 
+      available, 
+      featured, 
+      type, 
+      price, 
+      description,
+      // Handle both specs object and individual spec fields
+      specs,
+      seats,
+      fuel,
+      transmission
+    } = req.body;
+
+    // Build car data with proper field mapping
     const carData = {
       name,
       brand,
-      available: available === 'true',
+      available: available === 'true' || available === true,
+      featured: featured === 'true' || featured === true,
       type,
-      price: Number(price),
+      price: Number(price) || 0,
       description,
       rating: Number(rating) || 5.0,
       reviews: Number(reviews) || 0,
-      slug: slugify(`${brand}-${name}`),
+      slug: slugify(`${brand}-${name}-${Date.now()}`), // Add timestamp for uniqueness
       specs: {
-        seats: Number(seats),
-        fuel,
-        transmission,
-      },
-      featured: featured === 'true',
+        seats: Number(specs?.seats || seats || 5),
+        fuel: specs?.fuel || fuel || 'Petrol',
+        transmission: specs?.transmission || transmission || 'Automatic',
+      }
     };
 
+    // Handle file uploads
     if (req.files) {
-      if (req.files.thumbnail) carData.thumbnail = req.files.thumbnail[0].path;
-      if (req.files.newImages) carData.images = req.files.newImages.map(file => file.path);
+      if (req.files.thumbnail && req.files.thumbnail[0]) {
+        carData.thumbnail = req.files.thumbnail[0].path;
+      }
+      
+      // Use 'images' instead of 'newImages' to match frontend
+      if (req.files.images) {
+        carData.images = req.files.images.map(file => file.path);
+      }
+      // Also check for 'newImages' for backward compatibility
+      else if (req.files.newImages) {
+        carData.images = req.files.newImages.map(file => file.path);
+      }
     }
-    
+
+    console.log('Final car data:', carData);
     const car = await Car.create(carData);
     res.status(201).json(car);
   } catch (error) {
     console.error('CREATE CAR ERROR:', error);
     if (error.code === 11000) {
-        return res.status(400).json({ message: 'Erreur : Une voiture avec ce nom et cette marque existe déjà. Le nom doit être unique.' });
+      return res.status(400).json({ 
+        message: 'Erreur : Une voiture avec ce nom et cette marque existe déjà. Le nom doit être unique.' 
+      });
     }
-    res.status(500).json({ message: 'Erreur lors de la création de la voiture', error: error.message });
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Données de validation invalides', 
+        errors: error.errors 
+      });
+    }
+    res.status(500).json({ 
+      message: 'Erreur lors de la création de la voiture', 
+      error: error.message 
+    });
   }
 };
 
 // @desc    Obtenir toutes les voitures
 exports.getCars = async (req, res) => {
   try {
-    const cars = await Car.find({});
+    const cars = await Car.find({}).sort({ createdAt: -1 });
     res.status(200).json(cars);
   } catch (error) {
-    res.status(500).json({ message: 'Server Error' });
+    console.error('GET CARS ERROR:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur lors de la récupération des voitures', 
+      error: error.message 
+    });
   }
 };
 
@@ -69,7 +115,11 @@ exports.getCarBySlug = async (req, res) => {
       res.status(404).json({ message: 'Voiture non trouvée avec ce slug' });
     }
   } catch (error) {
-    res.status(500).json({ message: 'Server Error', error: error.message });
+    console.error('GET CAR BY SLUG ERROR:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur', 
+      error: error.message 
+    });
   }
 };
 
@@ -82,42 +132,85 @@ exports.getCarById = async (req, res) => {
     }
     res.status(200).json(car);
   } catch (error) {
-    res.status(500).json({ message: 'Server Error' });
+    console.error('GET CAR BY ID ERROR:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur', 
+      error: error.message 
+    });
   }
 };
 
 // @desc    Mettre à jour une voiture
 exports.updateCar = async (req, res) => {
   try {
+    console.log('Update request body:', req.body);
+    console.log('Update request files:', req.files);
+
     const car = await Car.findById(req.params.id);
-    if (!car) return res.status(404).json({ message: 'Voiture non trouvée' });
+    if (!car) {
+      return res.status(404).json({ message: 'Voiture non trouvée' });
+    }
 
-    // 'year' et 'features' ont été retirés
-    const { name, brand, type, price, description, featured, seats, fuel, transmission, available, imagesToDelete, rating, reviews } = req.body;
+    const { 
+      name, 
+      brand, 
+      type, 
+      price, 
+      description, 
+      featured, 
+      seats, 
+      fuel, 
+      transmission, 
+      available, 
+      imagesToDelete, 
+      rating, 
+      reviews,
+      specs 
+    } = req.body;
 
-    car.name = name || car.name;
-    car.brand = brand || car.brand;
-    car.type = type || car.type;
-    car.price = Number(price) || car.price;
-    car.description = description || car.description;
-    car.rating = Number(rating) || car.rating;
-    car.reviews = Number(reviews) || car.reviews;
+    // Update basic fields
+    if (name) car.name = name;
+    if (brand) car.brand = brand;
+    if (type) car.type = type;
+    if (price) car.price = Number(price);
+    if (description) car.description = description;
+    if (rating) car.rating = Number(rating);
+    if (reviews) car.reviews = Number(reviews);
     
-    car.specs.seats = Number(seats) || car.specs.seats;
-    car.specs.fuel = fuel || car.specs.fuel;
-    car.specs.transmission = transmission || car.specs.transmission;
+    // Update specs - handle both individual fields and specs object
+    if (specs) {
+      car.specs.seats = Number(specs.seats) || car.specs.seats;
+      car.specs.fuel = specs.fuel || car.specs.fuel;
+      car.specs.transmission = specs.transmission || car.specs.transmission;
+    } else {
+      if (seats) car.specs.seats = Number(seats);
+      if (fuel) car.specs.fuel = fuel;
+      if (transmission) car.specs.transmission = transmission;
+    }
     
-    car.slug = slugify(`${car.brand}-${car.name}`);
+    // Update slug if name or brand changed
+    if (name || brand) {
+      car.slug = slugify(`${car.brand}-${car.name}-${car._id}`);
+    }
 
-    if (available !== undefined) car.available = available === 'true';
-    if (featured !== undefined) car.featured = featured === 'true';
+    // Update boolean fields
+    if (available !== undefined) {
+      car.available = available === 'true' || available === true;
+    }
+    if (featured !== undefined) {
+      car.featured = featured === 'true' || featured === true;
+    }
 
     // Gestion de la suppression d'images
     if (imagesToDelete) {
       const imagesToDeleteArray = Array.isArray(imagesToDelete) ? imagesToDelete : [imagesToDelete];
+      
+      // Filter out images to delete
       car.images = car.images.filter(img => !imagesToDeleteArray.includes(img));
+      
+      // Delete physical files
       imagesToDeleteArray.forEach(filePath => {
-        if (filePath) {
+        if (filePath && fs.existsSync(path.join(__dirname, '..', filePath))) {
           fs.unlink(path.join(__dirname, '..', filePath), (err) => {
             if (err) console.error(`Failed to delete file: ${filePath}`, err);
           });
@@ -127,28 +220,48 @@ exports.updateCar = async (req, res) => {
 
     // Gestion des nouveaux téléversements d'images
     if (req.files) {
-      if (req.files.thumbnail) {
-        if (car.thumbnail) {
+      // Update thumbnail
+      if (req.files.thumbnail && req.files.thumbnail[0]) {
+        // Delete old thumbnail if exists
+        if (car.thumbnail && fs.existsSync(path.join(__dirname, '..', car.thumbnail))) {
           fs.unlink(path.join(__dirname, '..', car.thumbnail), err => {
             if (err) console.error(`Failed to delete old thumbnail: ${car.thumbnail}`, err);
           });
         }
         car.thumbnail = req.files.thumbnail[0].path;
       }
-      if (req.files.newImages) {
+      
+      // Add new images
+      if (req.files.images) {
+        const newImagePaths = req.files.images.map(file => file.path);
+        car.images.push(...newImagePaths);
+      }
+      // Also check for 'newImages' for backward compatibility
+      else if (req.files.newImages) {
         const newImagePaths = req.files.newImages.map(file => file.path);
         car.images.push(...newImagePaths);
       }
     }
-    
+
     const updatedCar = await car.save();
     res.status(200).json(updatedCar);
   } catch (error) {
     console.error('UPDATE CAR ERROR:', error);
     if (error.code === 11000) {
-        return res.status(400).json({ message: 'Erreur : Une voiture avec ce nom et cette marque existe déjà.' });
+      return res.status(400).json({ 
+        message: 'Erreur : Une voiture avec ce nom et cette marque existe déjà.' 
+      });
     }
-    res.status(500).json({ message: 'Error updating car', error: error.message });
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Données de validation invalides', 
+        errors: error.errors 
+      });
+    }
+    res.status(500).json({ 
+      message: 'Erreur lors de la mise à jour de la voiture', 
+      error: error.message 
+    });
   }
 };
 
@@ -159,19 +272,30 @@ exports.deleteCar = async (req, res) => {
     if (!car) {
       return res.status(404).json({ message: 'Voiture non trouvée' });
     }
-    const filesToDelete = car.thumbnail ? [car.thumbnail, ...car.images] : [...car.images];
+
+    // Delete associated files
+    const filesToDelete = [];
+    if (car.thumbnail) filesToDelete.push(car.thumbnail);
+    if (car.images && car.images.length > 0) {
+      filesToDelete.push(...car.images);
+    }
+
     filesToDelete.forEach(filePath => {
-      if (filePath) {
+      if (filePath && fs.existsSync(path.join(__dirname, '..', filePath))) {
         fs.unlink(path.join(__dirname, '..', filePath), (err) => {
           if (err) console.error(`Failed to delete file on car removal: ${filePath}`, err);
         });
       }
     });
-    await car.deleteOne();
-    res.status(200).json({ message: 'Voiture supprimée' });
+
+    await Car.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: 'Voiture supprimée avec succès' });
   } catch (error) {
     console.error('DELETE CAR ERROR:', error);
-    res.status(500).json({ message: 'Server Error', error: error.message });
+    res.status(500).json({ 
+      message: 'Erreur lors de la suppression de la voiture', 
+      error: error.message 
+    });
   }
 };
 
@@ -181,10 +305,16 @@ exports.getRelatedCars = async (req, res) => {
     const { type, currentCarSlug } = req.params;
     const cars = await Car.find({
       type: type,
-      slug: { $ne: currentCarSlug }
+      slug: { $ne: currentCarSlug },
+      available: true
     }).limit(3);
+    
     res.status(200).json(cars);
   } catch (error) {
-    res.status(500).json({ message: 'Server Error', error: error.message });
+    console.error('GET RELATED CARS ERROR:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur', 
+      error: error.message 
+    });
   }
 };
