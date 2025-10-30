@@ -1,6 +1,6 @@
 const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
-const { upload, handleMulterError } = require('../path/to/your/multer/config'); // Adjust path
+const { upload, handleMulterError } = require('../config/multerConfig'); // Adjust path
 const {
   createCar,
   getCars,
