@@ -1,10 +1,6 @@
 const Car = require('../models/Car');
-// ⚡ SUPPRIMER les imports fs et path car inutiles avec Cloudinary
-// const fs = require('fs');
-// const path = require('path');
-
-// ⚡ IMPORTER CLOUDINARY pour la suppression des images
-const { cloudinary } = require('../config/cloudinary');
+const fs = require('fs');
+const path = require('path');
 
 const slugify = (text) => text.toString().toLowerCase()
   .replace(/\s+/g, '-')
@@ -16,6 +12,7 @@ const slugify = (text) => text.toString().toLowerCase()
 // @desc    Créer une nouvelle voiture
 exports.createCar = async (req, res) => {
   try {
+    // 'year' et 'features' ont été retirés
     const { name, brand, rating, reviews, available, featured, type, price, description, seats, fuel, transmission } = req.body;
 
     const carData = {
@@ -36,20 +33,9 @@ exports.createCar = async (req, res) => {
       featured: featured === 'true',
     };
 
-    // ⚡ MODIFICATION : Gestion des images Cloudinary
     if (req.files) {
-      if (req.files.thumbnail) {
-        carData.thumbnail = {
-          url: req.files.thumbnail[0].path,
-          public_id: req.files.thumbnail[0].filename
-        };
-      }
-      if (req.files.newImages) {
-        carData.images = req.files.newImages.map(file => ({
-          url: file.path,
-          public_id: file.filename
-        }));
-      }
+      if (req.files.thumbnail) carData.thumbnail = req.files.thumbnail[0].path;
+      if (req.files.newImages) carData.images = req.files.newImages.map(file => file.path);
     }
     
     const car = await Car.create(carData);
@@ -106,6 +92,7 @@ exports.updateCar = async (req, res) => {
     const car = await Car.findById(req.params.id);
     if (!car) return res.status(404).json({ message: 'Voiture non trouvée' });
 
+    // 'year' et 'features' ont été retirés
     const { name, brand, type, price, description, featured, seats, fuel, transmission, available, imagesToDelete, rating, reviews } = req.body;
 
     car.name = name || car.name;
@@ -125,51 +112,32 @@ exports.updateCar = async (req, res) => {
     if (available !== undefined) car.available = available === 'true';
     if (featured !== undefined) car.featured = featured === 'true';
 
-    // ⚡ MODIFICATION : Suppression des images sur Cloudinary
+    // Gestion de la suppression d'images
     if (imagesToDelete) {
       const imagesToDeleteArray = Array.isArray(imagesToDelete) ? imagesToDelete : [imagesToDelete];
-      
-      // Filtrer les images à garder
-      car.images = car.images.filter(img => !imagesToDeleteArray.includes(img.url));
-      
-      // Supprimer les images de Cloudinary
-      for (const imageUrl of imagesToDeleteArray) {
-        const imageToDelete = car.images.find(img => img.url === imageUrl);
-        if (imageToDelete && imageToDelete.public_id) {
-          try {
-            await cloudinary.uploader.destroy(imageToDelete.public_id);
-            console.log(`✅ Image supprimée de Cloudinary: ${imageToDelete.public_id}`);
-          } catch (cloudinaryError) {
-            console.error(`❌ Erreur suppression Cloudinary: ${cloudinaryError.message}`);
-          }
+      car.images = car.images.filter(img => !imagesToDeleteArray.includes(img));
+      imagesToDeleteArray.forEach(filePath => {
+        if (filePath) {
+          fs.unlink(path.join(__dirname, '..', filePath), (err) => {
+            if (err) console.error(`Failed to delete file: ${filePath}`, err);
+          });
         }
-      }
+      });
     }
 
-    // ⚡ MODIFICATION : Gestion des nouvelles images Cloudinary
+    // Gestion des nouveaux téléversements d'images
     if (req.files) {
       if (req.files.thumbnail) {
-        // Supprimer l'ancienne thumbnail de Cloudinary
-        if (car.thumbnail && car.thumbnail.public_id) {
-          try {
-            await cloudinary.uploader.destroy(car.thumbnail.public_id);
-          } catch (cloudinaryError) {
-            console.error(`❌ Erreur suppression ancienne thumbnail: ${cloudinaryError.message}`);
-          }
+        if (car.thumbnail) {
+          fs.unlink(path.join(__dirname, '..', car.thumbnail), err => {
+            if (err) console.error(`Failed to delete old thumbnail: ${car.thumbnail}`, err);
+          });
         }
-        // Ajouter la nouvelle thumbnail
-        car.thumbnail = {
-          url: req.files.thumbnail[0].path,
-          public_id: req.files.thumbnail[0].filename
-        };
+        car.thumbnail = req.files.thumbnail[0].path;
       }
-      
       if (req.files.newImages) {
-        const newImages = req.files.newImages.map(file => ({
-          url: file.path,
-          public_id: file.filename
-        }));
-        car.images.push(...newImages);
+        const newImagePaths = req.files.newImages.map(file => file.path);
+        car.images.push(...newImagePaths);
       }
     }
     
@@ -191,28 +159,14 @@ exports.deleteCar = async (req, res) => {
     if (!car) {
       return res.status(404).json({ message: 'Voiture non trouvée' });
     }
-
-    // ⚡ MODIFICATION : Suppression des images sur Cloudinary
-    const filesToDelete = [];
-    if (car.thumbnail && car.thumbnail.public_id) {
-      filesToDelete.push(car.thumbnail.public_id);
-    }
-    if (car.images && car.images.length > 0) {
-      car.images.forEach(img => {
-        if (img.public_id) filesToDelete.push(img.public_id);
-      });
-    }
-
-    // Supprimer toutes les images de Cloudinary
-    for (const publicId of filesToDelete) {
-      try {
-        await cloudinary.uploader.destroy(publicId);
-        console.log(`✅ Image supprimée de Cloudinary: ${publicId}`);
-      } catch (cloudinaryError) {
-        console.error(`❌ Erreur suppression Cloudinary: ${cloudinaryError.message}`);
+    const filesToDelete = car.thumbnail ? [car.thumbnail, ...car.images] : [...car.images];
+    filesToDelete.forEach(filePath => {
+      if (filePath) {
+        fs.unlink(path.join(__dirname, '..', filePath), (err) => {
+          if (err) console.error(`Failed to delete file on car removal: ${filePath}`, err);
+        });
       }
-    }
-
+    });
     await car.deleteOne();
     res.status(200).json({ message: 'Voiture supprimée' });
   } catch (error) {
