@@ -23,16 +23,25 @@ const formatCarData = (car, baseUrl) => {
   const carObj = car.toObject ? car.toObject() : { ...car };
   
   // Ensure images have full URLs and proper structure
-  const images = (carObj.images || []).map(img => ({
-    _id: img._id || img.id,
-    url: img.url && img.url.startsWith('http') ? img.url : `${baseUrl}${img.url.startsWith('/') ? '' : '/'}${img.url}`,
-    filename: img.filename,
-    path: img.path,
-    alt: img.alt || `Car image ${img.filename}`,
-    isPrimary: img.isPrimary || false,
-    size: img.size || 0,
-    mimetype: img.mimetype || 'image/jpeg'
-  }));
+  const images = (carObj.images || []).map(img => {
+    let imageUrl = img.url;
+    
+    // If URL doesn't start with http, prepend baseUrl
+    if (imageUrl && !imageUrl.startsWith('http')) {
+      imageUrl = `${baseUrl}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`;
+    }
+    
+    return {
+      _id: img._id || img.id,
+      url: imageUrl,
+      filename: img.filename,
+      path: img.path,
+      alt: img.alt || `Car image ${img.filename}`,
+      isPrimary: img.isPrimary || false,
+      size: img.size || 0,
+      mimetype: img.mimetype || 'image/jpeg'
+    };
+  });
 
   // Find primary image
   const primaryImg = images.find(img => img.isPrimary) || images[0] || null;
@@ -40,11 +49,13 @@ const formatCarData = (car, baseUrl) => {
   // Format thumbnail - ensure it has proper URL
   let thumbnail = null;
   if (carObj.thumbnail && carObj.thumbnail.url) {
+    let thumbnailUrl = carObj.thumbnail.url;
+    if (!thumbnailUrl.startsWith('http')) {
+      thumbnailUrl = `${baseUrl}${thumbnailUrl.startsWith('/') ? '' : '/'}${thumbnailUrl}`;
+    }
     thumbnail = {
       ...carObj.thumbnail,
-      url: carObj.thumbnail.url.startsWith('http') 
-        ? carObj.thumbnail.url 
-        : `${baseUrl}${carObj.thumbnail.url.startsWith('/') ? '' : '/'}${carObj.thumbnail.url}`
+      url: thumbnailUrl
     };
   } else if (primaryImg) {
     thumbnail = { 
@@ -105,6 +116,18 @@ const validateImageFiles = (files) => {
   }
 };
 
+// Helper function to validate price
+const validatePrice = (price) => {
+  const priceNum = Number(price);
+  if (isNaN(priceNum) || priceNum < 0) {
+    throw new Error('Price must be a positive number');
+  }
+  if (priceNum % 100 !== 0) {
+    throw new Error('Price must be a multiple of 100');
+  }
+  return priceNum;
+};
+
 // @desc    Create a new car
 // @route   POST /api/cars
 // @access  Private (Admin)
@@ -131,6 +154,9 @@ exports.createCar = async (req, res) => {
       });
     }
 
+    // Validate price
+    const validatedPrice = validatePrice(price);
+
     // Validate images
     validateImageFiles(req.files);
 
@@ -146,17 +172,17 @@ exports.createCar = async (req, res) => {
 
     // Create car data
     const carData = {
-      name,
-      brand,
+      name: name.trim(),
+      brand: brand.trim(),
       available: available === 'true' || available === true,
       featured: featured === 'true' || featured === true,
       type: type || 'Sedan',
-      price: Number(price),
-      description,
-      rating: rating ? Number(rating) : 5.0,
-      reviews: reviews ? Number(reviews) : 0,
+      price: validatedPrice,
+      description: description.trim(),
+      rating: rating ? Math.min(5, Math.max(0, Number(rating))) : 5.0,
+      reviews: reviews ? Math.max(0, Number(reviews)) : 0,
       specs: {
-        seats: seats ? Number(seats) : 5,
+        seats: seats ? Math.max(1, Math.min(50, Number(seats))) : 5,
         fuel: fuel || 'Petrol',
         transmission: transmission || 'Automatic',
       },
@@ -204,10 +230,9 @@ exports.createCar = async (req, res) => {
       });
     }
     
-    res.status(500).json({ 
+    res.status(400).json({ 
       success: false,
-      message: error.message || 'Error creating car', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: error.message || 'Error creating car'
     });
   }
 };
@@ -269,8 +294,7 @@ exports.getCars = async (req, res) => {
     console.error('❌ GET CARS ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Server error while retrieving cars', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error while retrieving cars'
     });
   }
 };
@@ -306,8 +330,7 @@ exports.getCarBySlug = async (req, res) => {
     console.error('❌ GET CAR BY SLUG ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Server error', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error'
     });
   }
 };
@@ -351,8 +374,7 @@ exports.getCarById = async (req, res) => {
     console.error('❌ GET CAR BY ID ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Server error', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error'
     });
   }
 };
@@ -395,16 +417,19 @@ exports.updateCar = async (req, res) => {
     } = req.body;
 
     // Update basic fields
-    if (name !== undefined) car.name = name;
-    if (brand !== undefined) car.brand = brand;
+    if (name !== undefined) car.name = name.trim();
+    if (brand !== undefined) car.brand = brand.trim();
     if (type !== undefined) car.type = type;
-    if (price !== undefined) car.price = Number(price);
-    if (description !== undefined) car.description = description;
-    if (rating !== undefined) car.rating = Number(rating);
-    if (reviews !== undefined) car.reviews = Number(reviews);
+    if (price !== undefined) {
+      const validatedPrice = validatePrice(price);
+      car.price = validatedPrice;
+    }
+    if (description !== undefined) car.description = description.trim();
+    if (rating !== undefined) car.rating = Math.min(5, Math.max(0, Number(rating)));
+    if (reviews !== undefined) car.reviews = Math.max(0, Number(reviews));
     
     // Update specs
-    if (seats !== undefined) car.specs.seats = Number(seats);
+    if (seats !== undefined) car.specs.seats = Math.max(1, Math.min(50, Number(seats)));
     if (fuel !== undefined) car.specs.fuel = fuel;
     if (transmission !== undefined) car.specs.transmission = transmission;
     
@@ -531,10 +556,9 @@ exports.updateCar = async (req, res) => {
       });
     }
     
-    res.status(500).json({ 
+    res.status(400).json({ 
       success: false,
-      message: error.message || 'Error updating car', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: error.message || 'Error updating car'
     });
   }
 };
@@ -586,8 +610,7 @@ exports.deleteCar = async (req, res) => {
     console.error('❌ DELETE CAR ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Error deleting car', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Error deleting car'
     });
   }
 };
@@ -624,8 +647,7 @@ exports.getRelatedCars = async (req, res) => {
     console.error('❌ GET RELATED CARS ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Server error', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error'
     });
   }
 };
@@ -665,8 +687,7 @@ exports.getAvailableCars = async (req, res) => {
     console.error('❌ GET AVAILABLE CARS ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Error retrieving available cars', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Error retrieving available cars'
     });
   }
 };
@@ -701,8 +722,7 @@ exports.getFeaturedCars = async (req, res) => {
     console.error('❌ GET FEATURED CARS ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Error retrieving featured cars', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Error retrieving featured cars'
     });
   }
 };
@@ -772,8 +792,7 @@ exports.searchCars = async (req, res) => {
     console.error('❌ SEARCH CARS ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Error searching cars', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Error searching cars'
     });
   }
 };
@@ -868,8 +887,7 @@ exports.getCarStats = async (req, res) => {
     console.error('❌ GET CAR STATS ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Error retrieving statistics', 
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Error retrieving statistics'
     });
   }
 };
