@@ -35,7 +35,6 @@ const storage = multer.diskStorage({
     const sanitizedName = originalName.replace(/[^a-zA-Z0-9]/g, '_');
     const extension = path.extname(file.originalname).toLowerCase();
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-
     cb(null, `${sanitizedName}-${uniqueSuffix}${extension}`);
   },
 });
@@ -48,7 +47,6 @@ function checkFileType(file, cb) {
     'image/gif': true,
     'image/webp': true
   };
-
   const isValidMimeType = allowedFileTypes[file.mimetype];
   const fileExtension = path.extname(file.originalname).toLowerCase().replace('.', '');
   const isValidExtension = /jpeg|jpg|png|gif|webp/.test(fileExtension);
@@ -56,7 +54,8 @@ function checkFileType(file, cb) {
   if (isValidMimeType && isValidExtension) {
     return cb(null, true);
   } else {
-    cb(new Error('Invalid file type. Only JPEG, JPG, PNG, GIF, WEBP are allowed.'));
+    const allowedExtensions = Object.keys(allowedFileTypes).join(', ').replace('image/', '');
+    cb(new Error(`Invalid file type. Allowed types: ${allowedExtensions}.`));
   }
 }
 
@@ -73,6 +72,7 @@ const upload = multer({
 // Multer error handling middleware
 const handleMulterError = (error, req, res, next) => {
   if (error instanceof multer.MulterError) {
+    console.error('❌ Multer error:', error.message);
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
@@ -101,13 +101,15 @@ const handleMulterError = (error, req, res, next) => {
         error: 'Too many form parts'
       });
     }
-    // Handle other multer errors
+    // Log other Multer errors
+    console.error('❌ Unexpected Multer error:', error);
     return res.status(400).json({
       success: false,
       message: 'File upload error',
       error: error.message
     });
   } else if (error) {
+    console.error('❌ File upload error:', error);
     return res.status(400).json({
       success: false,
       message: 'File upload error',
@@ -124,18 +126,19 @@ const uploadFields = upload.fields([
 
 // Middleware to log uploaded files
 const logUploadedFiles = (req, res, next) => {
-  if (req.files) {
+  if (!req.files || Object.keys(req.files).length === 0) {
+    console.log('⚠️ No files uploaded.');
+  } else {
     console.log('📁 Uploaded files:');
     Object.keys(req.files).forEach(fieldName => {
       req.files[fieldName].forEach(file => {
-        console.log(`  - ${fieldName}: ${file.filename} (${file.size} bytes)`);
+        console.log(`  - ${fieldName}: ${file.filename} (${(file.size / 1024).toFixed(2)} KB)`);
       });
     });
   }
   next();
 };
 
-// ✅ FIXED: Order routes from most specific to least specific
 // Public routes - specific paths first
 router.get('/search', searchCars);
 router.get('/available', getAvailableCars);
@@ -147,7 +150,7 @@ router.get('/slug/:slug', getCarBySlug);
 router.get('/', getCars);
 router.get('/:id', getCarById);
 
-// Protected routes (admin only)
+// Admin routes (protected)
 router.post(
   '/',
   protect,

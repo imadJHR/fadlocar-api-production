@@ -12,7 +12,7 @@ const createImageObject = (file, baseUrl, isPrimary = false) => ({
   url: `${baseUrl}/uploads/${file.filename}`,
   filename: file.filename,
   path: file.path,
-  alt: file.originalname || '',
+  alt: file.originalname || `Car image ${file.filename}`,
   isPrimary: isPrimary,
   size: file.size || 0,
   mimetype: file.mimetype || 'image/jpeg'
@@ -20,42 +20,97 @@ const createImageObject = (file, baseUrl, isPrimary = false) => ({
 
 // Helper function to format car data with full URLs
 const formatCarData = (car, baseUrl) => {
-  const carObj = car.toObject ? car.toObject() : car;
+  const carObj = car.toObject ? car.toObject() : { ...car };
   
-  // Ensure images have full URLs
-  const images = carObj.images.map(img => ({
-    ...img,
-    url: img.url.startsWith('http') ? img.url : `${baseUrl}${img.url}`
+  // Ensure images have full URLs and proper structure
+  const images = (carObj.images || []).map(img => ({
+    _id: img._id || img.id,
+    url: img.url && img.url.startsWith('http') ? img.url : `${baseUrl}${img.url.startsWith('/') ? '' : '/'}${img.url}`,
+    filename: img.filename,
+    path: img.path,
+    alt: img.alt || `Car image ${img.filename}`,
+    isPrimary: img.isPrimary || false,
+    size: img.size || 0,
+    mimetype: img.mimetype || 'image/jpeg'
   }));
 
   // Find primary image
-  const primaryImg = images.find(img => img.isPrimary) || images[0];
+  const primaryImg = images.find(img => img.isPrimary) || images[0] || null;
 
-  // Format thumbnail
-  const thumbnail = carObj.thumbnail && carObj.thumbnail.url 
-    ? {
-        ...carObj.thumbnail,
-        url: carObj.thumbnail.url.startsWith('http') 
-          ? carObj.thumbnail.url 
-          : `${baseUrl}${carObj.thumbnail.url}`
-      }
-    : primaryImg 
-      ? { url: primaryImg.url, filename: primaryImg.filename, path: primaryImg.path }
-      : null;
+  // Format thumbnail - ensure it has proper URL
+  let thumbnail = null;
+  if (carObj.thumbnail && carObj.thumbnail.url) {
+    thumbnail = {
+      ...carObj.thumbnail,
+      url: carObj.thumbnail.url.startsWith('http') 
+        ? carObj.thumbnail.url 
+        : `${baseUrl}${carObj.thumbnail.url.startsWith('/') ? '' : '/'}${carObj.thumbnail.url}`
+    };
+  } else if (primaryImg) {
+    thumbnail = { 
+      url: primaryImg.url, 
+      filename: primaryImg.filename, 
+      path: primaryImg.path 
+    };
+  }
 
   return {
     ...carObj,
     images,
     thumbnail,
-    primaryImage: primaryImg || null,
-    thumbnailUrl: thumbnail ? thumbnail.url : null
+    primaryImage: primaryImg,
+    thumbnailUrl: thumbnail ? thumbnail.url : (primaryImg ? primaryImg.url : null)
   };
+};
+
+// Helper function to delete image files safely
+const deleteImageFiles = async (filenames) => {
+  if (!filenames || filenames.length === 0) return;
+  
+  const deletePromises = filenames.map(async (filename) => {
+    try {
+      const filePath = path.join(__dirname, '../uploads', filename);
+      await fs.access(filePath); // Check if file exists
+      await fs.unlink(filePath);
+      console.log(`✅ Deleted file: ${filename}`);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        console.log(`⚠️ File not found, skipping: ${filename}`);
+      } else {
+        console.error(`❌ Error deleting file ${filename}:`, error.message);
+      }
+    }
+  });
+  
+  await Promise.all(deletePromises);
+};
+
+// Helper function to validate image files
+const validateImageFiles = (files) => {
+  if (!files || !files.images || files.images.length === 0) {
+    throw new Error('At least one image is required');
+  }
+
+  const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  const maxSize = 5 * 1024 * 1024; // 5MB
+
+  for (const file of files.images) {
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new Error(`Invalid file type: ${file.mimetype}. Allowed types: JPEG, PNG, WebP`);
+    }
+    
+    if (file.size > maxSize) {
+      throw new Error(`File too large: ${file.originalname}. Maximum size: 5MB`);
+    }
+  }
 };
 
 // @desc    Create a new car
 // @route   POST /api/cars
 // @access  Private (Admin)
 exports.createCar = async (req, res) => {
+  let uploadedFiles = [];
+  
   try {
     console.log('=== START CREATE CAR ===');
     console.log('📦 Request body:', req.body);
@@ -77,22 +132,17 @@ exports.createCar = async (req, res) => {
     }
 
     // Validate images
-    if (!req.files || !req.files.images || req.files.images.length === 0) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'At least one image is required' 
-      });
-    }
+    validateImageFiles(req.files);
 
     const baseUrl = getBaseUrl(req);
-    const primaryIndex = primaryImageIndex !== undefined && !isNaN(Number(primaryImageIndex)) 
-      ? Number(primaryImageIndex) 
-      : 0;
+    const primaryIndex = parseInt(primaryImageIndex) || 0;
 
     // Process uploaded images
     const images = req.files.images.map((file, index) => 
       createImageObject(file, baseUrl, index === primaryIndex)
     );
+
+    uploadedFiles = images.map(img => img.filename);
 
     // Create car data
     const carData = {
@@ -132,13 +182,8 @@ exports.createCar = async (req, res) => {
     console.error('❌ CREATE CAR ERROR:', error);
     
     // Delete uploaded files on error
-    if (req.files && req.files.images) {
-      const deletePromises = req.files.images.map(file => 
-        fs.unlink(file.path).catch(err => 
-          console.error(`Error deleting file ${file.filename}:`, err.message)
-        )
-      );
-      await Promise.all(deletePromises);
+    if (uploadedFiles.length > 0) {
+      await deleteImageFiles(uploadedFiles);
     }
 
     if (error.code === 11000) {
@@ -147,6 +192,7 @@ exports.createCar = async (req, res) => {
         message: 'A car with this name and brand already exists' 
       });
     }
+    
     if (error.name === 'ValidationError') {
       return res.status(400).json({ 
         success: false,
@@ -157,10 +203,11 @@ exports.createCar = async (req, res) => {
         }, {})
       });
     }
+    
     res.status(500).json({ 
       success: false,
-      message: 'Error creating car', 
-      error: error.message 
+      message: error.message || 'Error creating car', 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -172,15 +219,37 @@ exports.getCars = async (req, res) => {
   try {
     console.log('📋 Getting all cars');
     
-    const { page = 1, limit = 10, sort = '-createdAt' } = req.query;
+    const { page = 1, limit = 10, sort = '-createdAt', search, type, fuel, minPrice, maxPrice, available } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
     
-    const cars = await Car.find({})
+    // Build filter object
+    const filter = {};
+    
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { brand: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    if (type) filter.type = type;
+    if (fuel) filter['specs.fuel'] = fuel;
+    if (available !== undefined) filter.available = available === 'true';
+    
+    // Price range filter
+    if (minPrice || maxPrice) {
+      filter.price = {};
+      if (minPrice) filter.price.$gte = Number(minPrice);
+      if (maxPrice) filter.price.$lte = Number(maxPrice);
+    }
+    
+    const cars = await Car.find(filter)
       .sort(sort)
       .skip(skip)
       .limit(Number(limit));
     
-    const total = await Car.countDocuments();
+    const total = await Car.countDocuments(filter);
     const baseUrl = getBaseUrl(req);
     const carsFormatted = cars.map(car => formatCarData(car, baseUrl));
     
@@ -201,7 +270,7 @@ exports.getCars = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Server error while retrieving cars', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -238,7 +307,7 @@ exports.getCarBySlug = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Server error', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -283,7 +352,7 @@ exports.getCarById = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Server error', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -292,6 +361,8 @@ exports.getCarById = async (req, res) => {
 // @route   PUT /api/cars/:id
 // @access  Private (Admin)
 exports.updateCar = async (req, res) => {
+  let newUploadedFiles = [];
+  
   try {
     console.log('=== START UPDATE CAR ===');
     console.log('📦 Request body:', req.body);
@@ -341,46 +412,56 @@ exports.updateCar = async (req, res) => {
     if (available !== undefined) car.available = available === 'true' || available === true;
     if (featured !== undefined) car.featured = featured === 'true' || featured === true;
 
-    // Handle image deletion
+    // Handle image deletion first
     if (imagesToDelete) {
-      const imagesToDeleteArray = Array.isArray(imagesToDelete) 
-        ? imagesToDelete 
-        : JSON.parse(imagesToDelete);
+      let imagesToDeleteArray;
+      try {
+        imagesToDeleteArray = Array.isArray(imagesToDelete) 
+          ? imagesToDelete 
+          : JSON.parse(imagesToDelete);
+      } catch (parseError) {
+        imagesToDeleteArray = imagesToDelete.split(',').map(img => img.trim());
+      }
       
       console.log('🗑️ Images to delete:', imagesToDeleteArray);
       
       const initialImageCount = car.images.length;
       
-      // Filter out images to delete
+      // Filter out images to delete and get their filenames
+      const imagesToDeleteFilenames = car.images
+        .filter(img => imagesToDeleteArray.includes(img.filename) || imagesToDeleteArray.includes(img._id.toString()))
+        .map(img => img.filename);
+      
       car.images = car.images.filter(img => 
-        !imagesToDeleteArray.includes(img.filename)
+        !imagesToDeleteArray.includes(img.filename) && !imagesToDeleteArray.includes(img._id.toString())
       );
       
       console.log(`🗑️ Images: ${initialImageCount} → ${car.images.length}`);
       
       // Delete physical files
-      const deletePromises = imagesToDeleteArray.map(filename => {
-        const filePath = path.join(__dirname, '../uploads', filename);
-        return fs.unlink(filePath).catch(err => {
-          console.error(`Error deleting file ${filename}:`, err.message);
-        });
-      });
-      await Promise.all(deletePromises);
+      await deleteImageFiles(imagesToDeleteFilenames);
     }
 
     // Handle new image uploads
     const baseUrl = getBaseUrl(req);
     
     if (req.files && req.files.images && req.files.images.length > 0) {
+      validateImageFiles(req.files);
+      
       const newImages = req.files.images.map(file => 
         createImageObject(file, baseUrl, false)
       );
+      newUploadedFiles = newImages.map(img => img.filename);
       car.images.push(...newImages);
       console.log(`✅ Added ${newImages.length} new images`);
     }
 
     // Validate that at least one image exists
     if (car.images.length === 0) {
+      // Delete newly uploaded files if no images remain
+      if (newUploadedFiles.length > 0) {
+        await deleteImageFiles(newUploadedFiles);
+      }
       return res.status(400).json({
         success: false,
         message: 'Car must have at least one image'
@@ -428,13 +509,8 @@ exports.updateCar = async (req, res) => {
     console.error('❌ UPDATE CAR ERROR:', error);
     
     // Delete newly uploaded files on error
-    if (req.files && req.files.images) {
-      const deletePromises = req.files.images.map(file => 
-        fs.unlink(file.path).catch(err => 
-          console.error(`Error deleting file ${file.filename}:`, err.message)
-        )
-      );
-      await Promise.all(deletePromises);
+    if (newUploadedFiles.length > 0) {
+      await deleteImageFiles(newUploadedFiles);
     }
 
     if (error.code === 11000) {
@@ -443,6 +519,7 @@ exports.updateCar = async (req, res) => {
         message: 'A car with this name and brand already exists' 
       });
     }
+    
     if (error.name === 'ValidationError') {
       return res.status(400).json({ 
         success: false,
@@ -453,10 +530,11 @@ exports.updateCar = async (req, res) => {
         }, {})
       });
     }
+    
     res.status(500).json({ 
       success: false,
-      message: 'Error updating car', 
-      error: error.message 
+      message: error.message || 'Error updating car', 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -491,13 +569,7 @@ exports.deleteCar = async (req, res) => {
     const filesToDelete = car.images?.map(img => img.filename).filter(Boolean) || [];
     console.log(`🗑️ Deleting ${filesToDelete.length} image files`);
 
-    const deletePromises = filesToDelete.map(filename => {
-      const filePath = path.join(__dirname, '../uploads', filename);
-      return fs.unlink(filePath).catch(err => {
-        console.error(`Error deleting file ${filename}:`, err.message);
-      });
-    });
-    await Promise.all(deletePromises);
+    await deleteImageFiles(filesToDelete);
 
     // Delete car from database
     await Car.findByIdAndDelete(id);
@@ -515,7 +587,7 @@ exports.deleteCar = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Error deleting car', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -553,7 +625,7 @@ exports.getRelatedCars = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Server error', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -594,7 +666,7 @@ exports.getAvailableCars = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Error retrieving available cars', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -630,7 +702,7 @@ exports.getFeaturedCars = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Error retrieving featured cars', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -701,7 +773,7 @@ exports.searchCars = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Error searching cars', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -719,11 +791,11 @@ exports.getCarStats = async (req, res) => {
     
     const mostExpensiveCar = await Car.findOne()
       .sort({ price: -1 })
-      .select('name brand price slug');
+      .select('name brand price slug thumbnail images');
       
     const topRatedCar = await Car.findOne()
       .sort({ rating: -1, reviews: -1 })
-      .select('name brand rating reviews slug');
+      .select('name brand rating reviews slug thumbnail images');
     
     const statsByType = await Car.aggregate([
       {
@@ -731,8 +803,7 @@ exports.getCarStats = async (req, res) => {
           _id: '$type',
           count: { $sum: 1 },
           avgPrice: { $avg: '$price' },
-          avgRating: { $avg: '$rating' },
-          totalCars: { $sum: 1 }
+          avgRating: { $avg: '$rating' }
         }
       },
       {
@@ -768,6 +839,8 @@ exports.getCarStats = async (req, res) => {
       }
     ]);
     
+    const baseUrl = getBaseUrl(req);
+    
     const stats = {
       overview: {
         total: totalCars,
@@ -776,8 +849,8 @@ exports.getCarStats = async (req, res) => {
         featured: featuredCars
       },
       highlights: {
-        mostExpensive: mostExpensiveCar,
-        topRated: topRatedCar
+        mostExpensive: mostExpensiveCar ? formatCarData(mostExpensiveCar, baseUrl) : null,
+        topRated: topRatedCar ? formatCarData(topRatedCar, baseUrl) : null
       },
       breakdown: {
         byType: statsByType,
@@ -796,7 +869,7 @@ exports.getCarStats = async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Error retrieving statistics', 
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
