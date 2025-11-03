@@ -33,7 +33,7 @@ const imageSchema = new mongoose.Schema({
     type: String,
     default: 'image/jpeg'
   }
-});
+}, { _id: false }); // Don't create _id for subdocuments
 
 const carSchema = new mongoose.Schema({
   name: {
@@ -54,8 +54,8 @@ const carSchema = new mongoose.Schema({
   },
   slug: {
     type: String,
-    required: true,
-    unique: true
+    unique: true,
+    sparse: true // Allow null during creation
   },
   price: {
     type: Number,
@@ -63,11 +63,14 @@ const carSchema = new mongoose.Schema({
   },
   rating: {
     type: Number,
-    default: 5.0
+    default: 5.0,
+    min: 0,
+    max: 5
   },
   reviews: {
     type: Number,
-    default: 0
+    default: 0,
+    min: 0
   },
   description: {
     type: String,
@@ -105,7 +108,9 @@ const carSchema = new mongoose.Schema({
   specs: {
     seats: {
       type: Number,
-      default: 5
+      default: 5,
+      min: 1,
+      max: 50
     },
     fuel: {
       type: String,
@@ -120,18 +125,51 @@ const carSchema = new mongoose.Schema({
   },
 }, {
   timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
+
+// --- Index for better query performance ---
+carSchema.index({ slug: 1 });
+carSchema.index({ brand: 1, name: 1 });
+carSchema.index({ type: 1 });
+carSchema.index({ available: 1 });
+carSchema.index({ featured: 1 });
 
 // --- Automatic slug generation ---
 carSchema.pre('save', function (next) {
-  if (this.isModified('name') || this.isModified('brand')) {
-    const idPart = this._id ? `-${this._id.toString().slice(-6)}` : '';
-    this.slug = slugify(`${this.brand}-${this.name}${idPart}`, {
+  // Generate slug on creation or when name/brand changes
+  if (this.isNew || this.isModified('name') || this.isModified('brand')) {
+    const baseSlug = slugify(`${this.brand}-${this.name}`, {
       lower: true,
-      strict: true
+      strict: true,
+      remove: /[*+~.()'"!:@]/g
     });
+    
+    // Add ID suffix for uniqueness (after first save, ID exists)
+    if (this._id) {
+      this.slug = `${baseSlug}-${this._id.toString().slice(-6)}`;
+    } else {
+      // Temporary slug on first save (will be updated after save hook)
+      this.slug = baseSlug;
+    }
   }
   next();
+});
+
+// --- Update slug after save if ID wasn't available ---
+carSchema.post('save', async function (doc) {
+  // If slug doesn't contain the ID suffix, update it
+  if (doc._id && doc.slug && !doc.slug.endsWith(doc._id.toString().slice(-6))) {
+    const baseSlug = slugify(`${doc.brand}-${doc.name}`, {
+      lower: true,
+      strict: true,
+      remove: /[*+~.()'"!:@]/g
+    });
+    
+    doc.slug = `${baseSlug}-${doc._id.toString().slice(-6)}`;
+    await doc.save();
+  }
 });
 
 // --- Automatic thumbnail generation ---
@@ -145,22 +183,91 @@ carSchema.pre('save', function (next) {
       filename: primaryImage.filename,
       path: primaryImage.path
     };
+  } else if (this.isModified('images') && this.images.length === 0) {
+    // Clear thumbnail if all images are removed
+    this.thumbnail = {
+      url: '',
+      filename: '',
+      path: ''
+    };
   }
   next();
 });
 
-// --- Virtual for thumbnail URL (if you want to use virtuals) ---
+// --- Helper method to process Multer files ---
+carSchema.methods.processUploadedImages = function(files, baseUrl = '') {
+  if (!files || !files.length) {
+    return [];
+  }
+
+  return files.map((file, index) => ({
+    url: `${baseUrl}/uploads/${file.filename}`,
+    filename: file.filename,
+    path: file.path,
+    alt: `${this.brand} ${this.name} - Image ${index + 1}`,
+    isPrimary: index === 0, // First image is primary by default
+    size: file.size,
+    mimetype: file.mimetype
+  }));
+};
+
+// --- Helper method to add new images ---
+carSchema.methods.addImages = function(files, baseUrl = '') {
+  const newImages = this.processUploadedImages(files, baseUrl);
+  
+  // If this is the first batch of images, set first as primary
+  if (this.images.length === 0 && newImages.length > 0) {
+    newImages[0].isPrimary = true;
+  } else {
+    // Otherwise, no new image should be primary by default
+    newImages.forEach(img => img.isPrimary = false);
+  }
+  
+  this.images.push(...newImages);
+  return newImages;
+};
+
+// --- Helper method to replace all images ---
+carSchema.methods.replaceImages = function(files, baseUrl = '') {
+  this.images = this.processUploadedImages(files, baseUrl);
+  return this.images;
+};
+
+// --- Helper method to set primary image ---
+carSchema.methods.setPrimaryImage = function(imageFilename) {
+  // Remove primary flag from all images
+  this.images.forEach(img => img.isPrimary = false);
+  
+  // Set new primary image
+  const primaryImage = this.images.find(img => img.filename === imageFilename);
+  if (primaryImage) {
+    primaryImage.isPrimary = true;
+    return true;
+  }
+  return false;
+};
+
+// --- Virtual for thumbnail URL ---
 carSchema.virtual('thumbnailUrl').get(function () {
   if (this.thumbnail && this.thumbnail.url) {
     return this.thumbnail.url;
   }
 
-  // Fallback to first image or default thumbnail
+  // Fallback to first image
   if (this.images && this.images.length > 0) {
     return this.images[0].url;
   }
 
-  return '/uploads/default-thumbnail.jpg'; // Default fallback
+  // Default fallback
+  return '/uploads/default-thumbnail.jpg';
+});
+
+// --- Virtual for primary image ---
+carSchema.virtual('primaryImage').get(function () {
+  if (this.images && this.images.length > 0) {
+    return this.images.find(img => img.isPrimary) || this.images[0];
+  }
+  return null;
 });
 
 const Car = mongoose.model('Car', carSchema);

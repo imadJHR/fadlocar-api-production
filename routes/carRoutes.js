@@ -18,14 +18,14 @@ const {
 
 const router = express.Router();
 
-// ✅ FIXED: Use absolute path for uploads directory
+// ✅ Use absolute path for uploads directory
 const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
   console.log('✅ Uploads directory created:', uploadsDir);
 }
 
-// Configuration Multer
+// Multer configuration
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, uploadsDir);
@@ -42,11 +42,11 @@ const storage = multer.diskStorage({
 
 function checkFileType(file, cb) {
   const allowedFileTypes = {
-    'image/jpeg': 'jpg',
-    'image/jpg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp'
+    'image/jpeg': true,
+    'image/jpg': true,
+    'image/png': true,
+    'image/gif': true,
+    'image/webp': true
   };
 
   const isValidMimeType = allowedFileTypes[file.mimetype];
@@ -56,7 +56,7 @@ function checkFileType(file, cb) {
   if (isValidMimeType && isValidExtension) {
     return cb(null, true);
   } else {
-    cb(new Error(`Error: Invalid file type. Only JPEG, JPG, PNG, GIF, WEBP are allowed.`));
+    cb(new Error('Invalid file type. Only JPEG, JPG, PNG, GIF, WEBP are allowed.'));
   }
 }
 
@@ -70,7 +70,7 @@ const upload = multer({
   }
 });
 
-// Middleware de gestion d'erreurs Multer
+// Multer error handling middleware
 const handleMulterError = (error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
@@ -101,6 +101,12 @@ const handleMulterError = (error, req, res, next) => {
         error: 'Too many form parts'
       });
     }
+    // Handle other multer errors
+    return res.status(400).json({
+      success: false,
+      message: 'File upload error',
+      error: error.message
+    });
   } else if (error) {
     return res.status(400).json({
       success: false,
@@ -111,13 +117,12 @@ const handleMulterError = (error, req, res, next) => {
   next();
 };
 
-// ✅ FIXED: Improved upload configuration - only 'images' field needed
-// (thumbnail is handled automatically in the model)
+// Upload fields configuration
 const uploadFields = upload.fields([
   { name: 'images', maxCount: 10 }
 ]);
 
-// Middleware pour logger les fichiers uploadés
+// Middleware to log uploaded files
 const logUploadedFiles = (req, res, next) => {
   if (req.files) {
     console.log('📁 Uploaded files:');
@@ -130,16 +135,19 @@ const logUploadedFiles = (req, res, next) => {
   next();
 };
 
-// Routes publiques
-router.get('/related/:type/:currentCarSlug', getRelatedCars);
-router.get('/slug/:slug', getCarBySlug);
+// ✅ FIXED: Order routes from most specific to least specific
+// Public routes - specific paths first
+router.get('/search', searchCars);
 router.get('/available', getAvailableCars);
 router.get('/featured', getFeaturedCars);
-router.get('/search', searchCars);
-router.get('/', getCars); // ✅ FIXED: Make GET /cars public
-router.get('/:id', getCarById); // ✅ FIXED: Make GET /cars/:id public
+router.get('/related/:type/:currentCarSlug', getRelatedCars);
+router.get('/slug/:slug', getCarBySlug);
 
-// Routes protégées (admin)
+// Public routes - general paths last
+router.get('/', getCars);
+router.get('/:id', getCarById);
+
+// Protected routes (admin only)
 router.post(
   '/',
   protect,
