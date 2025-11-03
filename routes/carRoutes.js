@@ -18,11 +18,11 @@ const {
 
 const router = express.Router();
 
-// Assurer que le dossier uploads existe
-const uploadsDir = '../uploads';
+// ✅ FIXED: Use absolute path for uploads directory
+const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('Uploads directory created');
+  console.log('✅ Uploads directory created:', uploadsDir);
 }
 
 // Configuration Multer
@@ -75,20 +75,56 @@ const handleMulterError = (error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
+        success: false,
         message: 'File too large',
         error: 'File size must be less than 5MB'
       });
     }
     if (error.code === 'LIMIT_UNEXPECTED_FILE') {
       return res.status(400).json({
+        success: false,
         message: 'Unexpected field',
         error: 'Invalid field name for file upload'
       });
     }
+    if (error.code === 'LIMIT_FILE_COUNT') {
+      return res.status(400).json({
+        success: false,
+        message: 'Too many files',
+        error: 'Maximum 10 images allowed'
+      });
+    }
+    if (error.code === 'LIMIT_PART_COUNT') {
+      return res.status(400).json({
+        success: false,
+        message: 'Too many parts',
+        error: 'Too many form parts'
+      });
+    }
   } else if (error) {
     return res.status(400).json({
+      success: false,
       message: 'File upload error',
       error: error.message
+    });
+  }
+  next();
+};
+
+// ✅ FIXED: Improved upload configuration - only 'images' field needed
+// (thumbnail is handled automatically in the model)
+const uploadFields = upload.fields([
+  { name: 'images', maxCount: 10 }
+]);
+
+// Middleware pour logger les fichiers uploadés
+const logUploadedFiles = (req, res, next) => {
+  if (req.files) {
+    console.log('📁 Uploaded files:');
+    Object.keys(req.files).forEach(fieldName => {
+      req.files[fieldName].forEach(file => {
+        console.log(`  - ${fieldName}: ${file.filename} (${file.size} bytes)`);
+      });
     });
   }
   next();
@@ -100,31 +136,28 @@ router.get('/slug/:slug', getCarBySlug);
 router.get('/available', getAvailableCars);
 router.get('/featured', getFeaturedCars);
 router.get('/search', searchCars);
+router.get('/', getCars); // ✅ FIXED: Make GET /cars public
+router.get('/:id', getCarById); // ✅ FIXED: Make GET /cars/:id public
 
 // Routes protégées (admin)
-router.route('/')
-  .get(getCars)
-  .post(
-    protect,
-    upload.fields([
-      { name: 'thumbnail', maxCount: 1 },
-      { name: 'images', maxCount: 10 }
-    ]),
-    handleMulterError,
-    createCar
-  );
+router.post(
+  '/',
+  protect,
+  uploadFields,
+  handleMulterError,
+  logUploadedFiles,
+  createCar
+);
 
-router.route('/:id')
-  .get(getCarById)
-  .put(
-    protect,
-    upload.fields([
-      { name: 'thumbnail', maxCount: 1 },
-      { name: 'images', maxCount: 10 }
-    ]),
-    handleMulterError,
-    updateCar
-  )
-  .delete(protect, deleteCar);
+router.put(
+  '/:id',
+  protect,
+  uploadFields,
+  handleMulterError,
+  logUploadedFiles,
+  updateCar
+);
+
+router.delete('/:id', protect, deleteCar);
 
 module.exports = router;
