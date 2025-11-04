@@ -1,29 +1,62 @@
-// api/controllers/carController.js
 const Car = require('../models/Car');
-const FirebaseStorageService = require('../services/firebaseStorageService');
+const fs = require('fs').promises;
+const path = require('path');
 
-// Helper function to create image objects from Firebase upload results
-const createImageObject = (uploadResult, isPrimary = false) => ({
-  url: uploadResult.url,
-  filename: uploadResult.filename,
-  path: uploadResult.filename, // Use filename as path for Firebase
-  alt: uploadResult.originalName || `Car image ${uploadResult.filename}`,
+// Helper function to get base URL from request
+const getBaseUrl = (req) => {
+  return `${req.protocol}://${req.get('host')}`;
+};
+
+// Helper function to create image objects from Multer files
+const createImageObject = (file, baseUrl, isPrimary = false) => ({
+  url: `${baseUrl}/uploads/${file.filename}`,
+  filename: file.filename,
+  path: file.path,
+  alt: file.originalname || `Car image ${file.filename}`,
   isPrimary: isPrimary,
-  size: uploadResult.size,
-  mimetype: uploadResult.mimetype
+  size: file.size || 0,
+  mimetype: file.mimetype || 'image/jpeg'
 });
 
-// Helper function to format car data
-const formatCarData = (car) => {
+// Helper function to format car data with full URLs
+const formatCarData = (car, baseUrl) => {
   const carObj = car.toObject ? car.toObject() : { ...car };
 
-  // Find primary image
-  const primaryImg = carObj.images?.find(img => img.isPrimary) || carObj.images?.[0] || null;
+  // Ensure images have full URLs and proper structure
+  const images = (carObj.images || []).map(img => {
+    let imageUrl = img.url;
 
-  // Format thumbnail
+    // If URL doesn't start with http, prepend baseUrl
+    if (imageUrl && !imageUrl.startsWith('http')) {
+      imageUrl = `${baseUrl}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`;
+    }
+
+    return {
+      _id: img._id || img.id,
+      url: imageUrl,
+      filename: img.filename,
+      path: img.path,
+      alt: img.alt || `Car image ${img.filename}`,
+      isPrimary: img.isPrimary || false,
+      size: img.size || 0,
+      mimetype: img.mimetype || 'image/jpeg'
+    };
+  });
+
+  // Find primary image
+  const primaryImg = images.find(img => img.isPrimary) || images[0] || null;
+
+  // Format thumbnail - ensure it has proper URL
   let thumbnail = null;
   if (carObj.thumbnail && carObj.thumbnail.url) {
-    thumbnail = carObj.thumbnail;
+    let thumbnailUrl = carObj.thumbnail.url;
+    if (!thumbnailUrl.startsWith('http')) {
+      thumbnailUrl = `${baseUrl}${thumbnailUrl.startsWith('/') ? '' : '/'}${thumbnailUrl}`;
+    }
+    thumbnail = {
+      ...carObj.thumbnail,
+      url: thumbnailUrl
+    };
   } else if (primaryImg) {
     thumbnail = {
       url: primaryImg.url,
@@ -34,10 +67,53 @@ const formatCarData = (car) => {
 
   return {
     ...carObj,
+    images,
     thumbnail,
-    primaryImage: primaryImg ? primaryImg.url : null,
+    primaryImage: primaryImg,
     thumbnailUrl: thumbnail ? thumbnail.url : (primaryImg ? primaryImg.url : null)
   };
+};
+
+// Helper function to delete image files safely
+const deleteImageFiles = async (filenames) => {
+  if (!filenames || filenames.length === 0) return;
+
+  const deletePromises = filenames.map(async (filename) => {
+    try {
+      const filePath = path.join(__dirname, '../uploads', filename);
+      await fs.access(filePath); // Check if file exists
+      await fs.unlink(filePath);
+      console.log(`✅ Deleted file: ${filename}`);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        console.log(`⚠️ File not found, skipping: ${filename}`);
+      } else {
+        console.error(`❌ Error deleting file ${filename}:`, error.message);
+      }
+    }
+  });
+
+  await Promise.all(deletePromises);
+};
+
+// Helper function to validate image files
+const validateImageFiles = (files) => {
+  if (!files || !files.images || files.images.length === 0) {
+    throw new Error('At least one image is required');
+  }
+
+  const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  const maxSize = 5 * 1024 * 1024; // 5MB
+
+  for (const file of files.images) {
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new Error(`Invalid file type: ${file.mimetype}. Allowed types: JPEG, PNG, WebP`);
+    }
+
+    if (file.size > maxSize) {
+      throw new Error(`File too large: ${file.originalname}. Maximum size: 5MB`);
+    }
+  }
 };
 
 // Helper function to validate price
@@ -61,6 +137,7 @@ exports.createCar = async (req, res) => {
   try {
     console.log('=== START CREATE CAR ===');
     console.log('📦 Request body:', req.body);
+    console.log('📁 Files:', req.files);
 
     const {
       name, brand, rating, reviews, available,
@@ -81,24 +158,17 @@ exports.createCar = async (req, res) => {
     const validatedPrice = validatePrice(price);
 
     // Validate images
-    if (!req.files || !req.files.images || req.files.images.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'At least one image is required'
-      });
-    }
+    validateImageFiles(req.files);
 
-    // Upload images to Firebase
-    console.log(`📤 Uploading ${req.files.images.length} images to Firebase...`);
-    const uploadResults = await FirebaseStorageService.uploadMultipleFiles(req.files.images, 'cars');
-    uploadedFiles = uploadResults;
-
+    const baseUrl = getBaseUrl(req);
     const primaryIndex = parseInt(primaryImageIndex) || 0;
 
     // Process uploaded images
-    const images = uploadResults.map((result, index) =>
-      createImageObject(result, index === primaryIndex)
+    const images = req.files.images.map((file, index) =>
+      createImageObject(file, baseUrl, index === primaryIndex)
     );
+
+    uploadedFiles = images.map(img => img.filename);
 
     // Create car data
     const carData = {
@@ -119,14 +189,14 @@ exports.createCar = async (req, res) => {
       images
     };
 
-    console.log(`✅ Processed ${images.length} images. Primary: index ${primaryIndex}`);
+    console.log(`✅ Processing ${images.length} images. Primary: index ${primaryIndex}`);
 
     // Create car
     const car = await Car.create(carData);
     console.log('✅ Car created successfully - ID:', car._id);
 
-    // Format response
-    const formattedCar = formatCarData(car);
+    // Format response with full URLs
+    const formattedCar = formatCarData(car, baseUrl);
 
     res.status(201).json({
       success: true,
@@ -137,15 +207,9 @@ exports.createCar = async (req, res) => {
   } catch (error) {
     console.error('❌ CREATE CAR ERROR:', error);
 
-    // Delete uploaded files from Firebase on error
+    // Delete uploaded files on error
     if (uploadedFiles.length > 0) {
-      try {
-        const fileUrls = uploadedFiles.map(file => file.url);
-        await FirebaseStorageService.deleteMultipleFiles(fileUrls);
-        console.log('🗑️ Cleaned up uploaded files due to error');
-      } catch (cleanupError) {
-        console.error('❌ Error cleaning up files:', cleanupError);
-      }
+      await deleteImageFiles(uploadedFiles);
     }
 
     if (error.code === 11000) {
@@ -211,7 +275,8 @@ exports.getCars = async (req, res) => {
       .limit(Number(limit));
 
     const total = await Car.countDocuments(filter);
-    const carsFormatted = cars.map(car => formatCarData(car));
+    const baseUrl = getBaseUrl(req);
+    const carsFormatted = cars.map(car => formatCarData(car, baseUrl));
 
     console.log(`✅ ${cars.length} cars retrieved (page ${page})`);
 
@@ -252,7 +317,8 @@ exports.getCarBySlug = async (req, res) => {
       });
     }
 
-    const formattedCar = formatCarData(car);
+    const baseUrl = getBaseUrl(req);
+    const formattedCar = formatCarData(car, baseUrl);
 
     console.log(`✅ Car found: ${car.brand} ${car.name}`);
 
@@ -295,7 +361,8 @@ exports.getCarById = async (req, res) => {
       });
     }
 
-    const formattedCar = formatCarData(car);
+    const baseUrl = getBaseUrl(req);
+    const formattedCar = formatCarData(car, baseUrl);
 
     console.log(`✅ Car found: ${car.brand} ${car.name}`);
 
@@ -321,6 +388,7 @@ exports.updateCar = async (req, res) => {
   try {
     console.log('=== START UPDATE CAR ===');
     console.log('📦 Request body:', req.body);
+    console.log('📁 Files:', req.files);
 
     const { id } = req.params;
 
@@ -380,14 +448,14 @@ exports.updateCar = async (req, res) => {
         imagesToDeleteArray = imagesToDelete.split(',').map(img => img.trim());
       }
 
-      console.log('🗑️ Images to delete from Firebase:', imagesToDeleteArray);
+      console.log('🗑️ Images to delete:', imagesToDeleteArray);
 
       const initialImageCount = car.images.length;
 
-      // Filter out images to delete and get their URLs
-      const imagesToDeleteUrls = car.images
+      // Filter out images to delete and get their filenames
+      const imagesToDeleteFilenames = car.images
         .filter(img => imagesToDeleteArray.includes(img.filename) || imagesToDeleteArray.includes(img._id.toString()))
-        .map(img => img.url);
+        .map(img => img.filename);
 
       car.images = car.images.filter(img =>
         !imagesToDeleteArray.includes(img.filename) && !imagesToDeleteArray.includes(img._id.toString())
@@ -395,22 +463,20 @@ exports.updateCar = async (req, res) => {
 
       console.log(`🗑️ Images: ${initialImageCount} → ${car.images.length}`);
 
-      // Delete physical files from Firebase
-      if (imagesToDeleteUrls.length > 0) {
-        await FirebaseStorageService.deleteMultipleFiles(imagesToDeleteUrls);
-      }
+      // Delete physical files
+      await deleteImageFiles(imagesToDeleteFilenames);
     }
 
     // Handle new image uploads
-    if (req.files && req.files.images && req.files.images.length > 0) {
-      console.log(`📤 Uploading ${req.files.images.length} new images to Firebase...`);
-      const newUploadResults = await FirebaseStorageService.uploadMultipleFiles(req.files.images, 'cars');
-      newUploadedFiles = newUploadResults;
+    const baseUrl = getBaseUrl(req);
 
-      const newImages = newUploadResults.map(result =>
-        createImageObject(result, false)
+    if (req.files && req.files.images && req.files.images.length > 0) {
+      validateImageFiles(req.files);
+
+      const newImages = req.files.images.map(file =>
+        createImageObject(file, baseUrl, false)
       );
-      
+      newUploadedFiles = newImages.map(img => img.filename);
       car.images.push(...newImages);
       console.log(`✅ Added ${newImages.length} new images`);
     }
@@ -419,8 +485,7 @@ exports.updateCar = async (req, res) => {
     if (car.images.length === 0) {
       // Delete newly uploaded files if no images remain
       if (newUploadedFiles.length > 0) {
-        const fileUrls = newUploadedFiles.map(file => file.url);
-        await FirebaseStorageService.deleteMultipleFiles(fileUrls);
+        await deleteImageFiles(newUploadedFiles);
       }
       return res.status(400).json({
         success: false,
@@ -452,9 +517,10 @@ exports.updateCar = async (req, res) => {
       console.log('⭐ Set first image as primary (fallback)');
     }
 
-    // Save the car
+    // Save will trigger pre-save hooks for slug and thumbnail
     const updatedCar = await car.save();
-    const formattedCar = formatCarData(updatedCar);
+
+    const formattedCar = formatCarData(updatedCar, baseUrl);
 
     console.log('✅ Car updated successfully - ID:', updatedCar._id);
 
@@ -467,15 +533,9 @@ exports.updateCar = async (req, res) => {
   } catch (error) {
     console.error('❌ UPDATE CAR ERROR:', error);
 
-    // Delete newly uploaded files from Firebase on error
+    // Delete newly uploaded files on error
     if (newUploadedFiles.length > 0) {
-      try {
-        const fileUrls = newUploadedFiles.map(file => file.url);
-        await FirebaseStorageService.deleteMultipleFiles(fileUrls);
-        console.log('🗑️ Cleaned up newly uploaded files due to error');
-      } catch (cleanupError) {
-        console.error('❌ Error cleaning up files:', cleanupError);
-      }
+      await deleteImageFiles(newUploadedFiles);
     }
 
     if (error.code === 11000) {
@@ -529,13 +589,11 @@ exports.deleteCar = async (req, res) => {
       });
     }
 
-    // Delete associated image files from Firebase
-    const filesToDelete = car.images?.map(img => img.url).filter(Boolean) || [];
-    console.log(`🗑️ Deleting ${filesToDelete.length} image files from Firebase`);
+    // Delete associated image files
+    const filesToDelete = car.images?.map(img => img.filename).filter(Boolean) || [];
+    console.log(`🗑️ Deleting ${filesToDelete.length} image files`);
 
-    if (filesToDelete.length > 0) {
-      await FirebaseStorageService.deleteMultipleFiles(filesToDelete);
-    }
+    await deleteImageFiles(filesToDelete);
 
     // Delete car from database
     await Car.findByIdAndDelete(id);
@@ -575,7 +633,8 @@ exports.getRelatedCars = async (req, res) => {
       .limit(Number(limit))
       .sort({ rating: -1, createdAt: -1 });
 
-    const carsFormatted = cars.map(car => formatCarData(car));
+    const baseUrl = getBaseUrl(req);
+    const carsFormatted = cars.map(car => formatCarData(car, baseUrl));
 
     console.log(`✅ ${cars.length} related cars found`);
 
@@ -609,7 +668,8 @@ exports.getAvailableCars = async (req, res) => {
       .limit(Number(limit));
 
     const total = await Car.countDocuments({ available: true });
-    const carsFormatted = cars.map(car => formatCarData(car));
+    const baseUrl = getBaseUrl(req);
+    const carsFormatted = cars.map(car => formatCarData(car, baseUrl));
 
     console.log(`✅ ${cars.length} available cars found`);
 
@@ -648,7 +708,8 @@ exports.getFeaturedCars = async (req, res) => {
       .sort({ rating: -1, createdAt: -1 })
       .limit(Number(limit));
 
-    const carsFormatted = cars.map(car => formatCarData(car));
+    const baseUrl = getBaseUrl(req);
+    const carsFormatted = cars.map(car => formatCarData(car, baseUrl));
 
     console.log(`✅ ${cars.length} featured cars found`);
 
@@ -712,7 +773,8 @@ exports.searchCars = async (req, res) => {
       .limit(Number(limit));
 
     const total = await Car.countDocuments(searchCriteria);
-    const carsFormatted = cars.map(car => formatCarData(car));
+    const baseUrl = getBaseUrl(req);
+    const carsFormatted = cars.map(car => formatCarData(car, baseUrl));
 
     console.log(`✅ ${cars.length} cars found with search criteria`);
 
@@ -796,6 +858,8 @@ exports.getCarStats = async (req, res) => {
       }
     ]);
 
+    const baseUrl = getBaseUrl(req);
+
     const stats = {
       overview: {
         total: totalCars,
@@ -804,8 +868,8 @@ exports.getCarStats = async (req, res) => {
         featured: featuredCars
       },
       highlights: {
-        mostExpensive: mostExpensiveCar ? formatCarData(mostExpensiveCar) : null,
-        topRated: topRatedCar ? formatCarData(topRatedCar) : null
+        mostExpensive: mostExpensiveCar ? formatCarData(mostExpensiveCar, baseUrl) : null,
+        topRated: topRatedCar ? formatCarData(topRatedCar, baseUrl) : null
       },
       breakdown: {
         byType: statsByType,
@@ -822,134 +886,6 @@ exports.getCarStats = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error retrieving statistics'
-    });
-  }
-};
-
-// @desc    Get cars by type
-// @route   GET /api/cars/type/:type
-// @access  Public
-exports.getCarsByType = async (req, res) => {
-  try {
-    const { type } = req.params;
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
-
-    console.log(`🔍 Getting cars by type: ${type}`);
-
-    const cars = await Car.find({ 
-      type: type,
-      available: true 
-    })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit));
-
-    const total = await Car.countDocuments({ 
-      type: type,
-      available: true 
-    });
-
-    const carsFormatted = cars.map(car => formatCarData(car));
-
-    console.log(`✅ ${cars.length} cars found for type: ${type}`);
-
-    res.status(200).json({
-      success: true,
-      data: carsFormatted,
-      pagination: {
-        total,
-        page: Number(page),
-        limit: Number(limit),
-        pages: Math.ceil(total / Number(limit))
-      }
-    });
-  } catch (error) {
-    console.error('❌ GET CARS BY TYPE ERROR:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error retrieving cars by type'
-    });
-  }
-};
-
-// @desc    Get cars by fuel type
-// @route   GET /api/cars/fuel/:fuel
-// @access  Public
-exports.getCarsByFuel = async (req, res) => {
-  try {
-    const { fuel } = req.params;
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
-
-    console.log(`🔍 Getting cars by fuel: ${fuel}`);
-
-    const cars = await Car.find({ 
-      'specs.fuel': fuel,
-      available: true 
-    })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit));
-
-    const total = await Car.countDocuments({ 
-      'specs.fuel': fuel,
-      available: true 
-    });
-
-    const carsFormatted = cars.map(car => formatCarData(car));
-
-    console.log(`✅ ${cars.length} cars found for fuel: ${fuel}`);
-
-    res.status(200).json({
-      success: true,
-      data: carsFormatted,
-      pagination: {
-        total,
-        page: Number(page),
-        limit: Number(limit),
-        pages: Math.ceil(total / Number(limit))
-      }
-    });
-  } catch (error) {
-    console.error('❌ GET CARS BY FUEL ERROR:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error retrieving cars by fuel type'
-    });
-  }
-};
-
-// @desc    Get popular cars (most reviewed)
-// @route   GET /api/cars/popular
-// @access  Public
-exports.getPopularCars = async (req, res) => {
-  try {
-    const { limit = 6 } = req.query;
-
-    console.log('🔍 Getting popular cars');
-
-    const cars = await Car.find({ 
-      available: true,
-      reviews: { $gt: 0 }
-    })
-      .sort({ reviews: -1, rating: -1 })
-      .limit(Number(limit));
-
-    const carsFormatted = cars.map(car => formatCarData(car));
-
-    console.log(`✅ ${cars.length} popular cars found`);
-
-    res.status(200).json({
-      success: true,
-      data: carsFormatted,
-      count: cars.length
-    });
-  } catch (error) {
-    console.error('❌ GET POPULAR CARS ERROR:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error retrieving popular cars'
     });
   }
 };
