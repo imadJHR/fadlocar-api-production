@@ -2,95 +2,43 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Ensure uploads directory exists
-const uploadsDir = '../uploads';
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+// Créer le dossier uploads s'il n'existe pas
+const uploadDir = path.join(__dirname, '../uploads/cars');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Set up storage engine
+// Configuration du stockage
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadsDir);
-  },
-  filename: function (req, file, cb) {
-    // Sanitize filename and create unique name
-    const originalName = path.parse(file.originalname).name;
-    const sanitizedName = originalName.replace(/[^a-zA-Z0-9]/g, '_');
-    const extension = path.extname(file.originalname).toLowerCase();
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    
-    cb(null, `${sanitizedName}-${uniqueSuffix}${extension}`);
-  },
+    destination: (req, file, cb) => {
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const ext = path.extname(file.originalname);
+        cb(null, 'car-' + uniqueSuffix + ext);
+    }
 });
 
-// Improved file type checking
-function checkFileType(file, cb) {
-  const allowedFileTypes = {
-    'image/jpeg': 'jpg',
-    'image/jpg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp'
-  };
+// Filtrage des types de fichiers
+const fileFilter = (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
 
-  const allowedExtensions = /jpeg|jpg|png|gif|webp/;
-  
-  // Check MIME type
-  const isValidMimeType = allowedFileTypes[file.mimetype];
-  
-  // Check file extension
-  const fileExtension = path.extname(file.originalname).toLowerCase().replace('.', '');
-  const isValidExtension = allowedExtensions.test(fileExtension);
-
-  if (isValidMimeType && isValidExtension) {
-    return cb(null, true);
-  } else {
-    cb(new Error(`Error: Invalid file type. Only ${Object.keys(allowedFileTypes).join(', ')} are allowed.`));
-  }
-}
-
-// Error handling for Multer
-const handleMulterError = (error, req, res, next) => {
-  if (error instanceof multer.MulterError) {
-    if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({
-        message: 'File too large',
-        error: 'File size must be less than 5MB'
-      });
+    if (mimetype && extname) {
+        return cb(null, true);
+    } else {
+        cb(new Error('Seules les images sont autorisées (JPEG, JPG, PNG, GIF, WebP)'));
     }
-    if (error.code === 'LIMIT_FILE_COUNT') {
-      return res.status(400).json({
-        message: 'Too many files',
-        error: 'Maximum file count exceeded'
-      });
-    }
-    if (error.code === 'LIMIT_UNEXPECTED_FILE') {
-      return res.status(400).json({
-        message: 'Unexpected field',
-        error: 'Invalid field name for file upload'
-      });
-    }
-  } else if (error) {
-    // Custom errors from checkFileType
-    return res.status(400).json({
-      message: 'File upload error',
-      error: error.message
-    });
-  }
-  next();
 };
 
-// Init upload variable
 const upload = multer({
-  storage: storage,
-  limits: { 
-    fileSize: 5 * 1024 * 1024, // 5MB in bytes
-    files: 12 // Maximum number of files (1 thumbnail + up to 11 images)
-  },
-  fileFilter: function (req, file, cb) {
-    checkFileType(file, cb);
-  },
+    storage: storage,
+    limits: {
+        fileSize: 5 * 1024 * 1024, // 5MB max
+    },
+    fileFilter: fileFilter
 });
 
-module.exports = { upload, handleMulterError };
+module.exports = upload;
