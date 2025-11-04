@@ -1,31 +1,106 @@
 const Car = require('../models/Car');
+const mongoose = require('mongoose'); // ✅ Import ajouté
 const fs = require('fs').promises;
 const path = require('path');
 
-// Helper pour supprimer les fichiers d'images
+// ============================================================================
+// HELPERS & UTILITIES
+// ============================================================================
+
+/**
+ * Helper pour supprimer les fichiers d'images de manière sécurisée
+ * @param {Array<string>} filenames - Liste des noms de fichiers à supprimer
+ */
 const deleteImageFiles = async (filenames) => {
     try {
         const deletePromises = filenames.map(async (filename) => {
+            // ✅ Protection contre path traversal
+            if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+                console.error(`⚠️ Tentative de chemin suspect détectée: ${filename}`);
+                return;
+            }
+
             const filePath = path.join(__dirname, '../uploads/cars', filename);
             try {
                 await fs.access(filePath);
                 await fs.unlink(filePath);
-                console.log(`Fichier supprimé: ${filename}`);
+                console.log(`✅ Fichier supprimé: ${filename}`);
             } catch (error) {
-                console.log(`Fichier non trouvé: ${filename}`);
+                console.log(`ℹ️ Fichier non trouvé: ${filename}`);
             }
         });
 
         await Promise.all(deletePromises);
     } catch (error) {
-        console.error('Erreur lors de la suppression des fichiers:', error);
+        console.error('❌ Erreur lors de la suppression des fichiers:', error);
         throw error;
     }
 };
 
-// @desc    Récupérer toutes les voitures
-// @route   GET /api/cars
-// @access  Public
+/**
+ * Valide et normalise les spécifications d'une voiture
+ * @param {Object} specs - Spécifications brutes
+ * @returns {Object} Spécifications validées
+ */
+const validateSpecs = (specs) => {
+    const defaultSpecs = {
+        seats: 5,
+        fuel: 'Petrol',
+        transmission: 'Automatic'
+    };
+
+    const parsedSpecs = typeof specs === 'string' ? JSON.parse(specs) : (specs || {});
+
+    return {
+        seats: Math.max(1, Math.min(50, Number(parsedSpecs.seats) || defaultSpecs.seats)),
+        fuel: ['Petrol', 'Diesel', 'Electric', 'Hybrid'].includes(parsedSpecs.fuel)
+            ? parsedSpecs.fuel
+            : defaultSpecs.fuel,
+        transmission: ['Automatic', 'Manual'].includes(parsedSpecs.transmission)
+            ? parsedSpecs.transmission
+            : defaultSpecs.transmission
+    };
+};
+
+/**
+ * Vérifie si le type de voiture est valide
+ * @param {string} type - Type de voiture
+ * @returns {boolean}
+ */
+const isValidCarType = (type) => {
+    const validTypes = ['Sedan', 'SUV', 'Hatchback', 'Coupe', 'Truck'];
+    return validTypes.includes(type);
+};
+
+/**
+ * Vérifie si le type de carburant est valide
+ * @param {string} fuel - Type de carburant
+ * @returns {boolean}
+ */
+const isValidFuelType = (fuel) => {
+    const validFuels = ['Petrol', 'Diesel', 'Electric', 'Hybrid'];
+    return validFuels.includes(fuel);
+};
+
+/**
+ * Vérifie si le type de transmission est valide
+ * @param {string} transmission - Type de transmission
+ * @returns {boolean}
+ */
+const isValidTransmissionType = (transmission) => {
+    const validTransmissions = ['Automatic', 'Manual'];
+    return validTransmissions.includes(transmission);
+};
+
+// ============================================================================
+// CONTROLLERS
+// ============================================================================
+
+/**
+ * @desc    Récupérer toutes les voitures avec filtres et pagination
+ * @route   GET /api/cars
+ * @access  Public
+ */
 const getAllCars = async (req, res) => {
     try {
         const {
@@ -43,18 +118,41 @@ const getAllCars = async (req, res) => {
         // Construction du filtre
         let filter = {};
 
-        if (type) filter.type = type;
-        if (brand) filter.brand = new RegExp(brand, 'i');
-        if (available !== undefined) filter.available = available === 'true';
-        if (featured !== undefined) filter.featured = featured === 'true';
-
-        if (minPrice || maxPrice) {
-            filter.price = {};
-            if (minPrice) filter.price.$gte = Number(minPrice);
-            if (maxPrice) filter.price.$lte = Number(maxPrice);
+        if (type && isValidCarType(type)) {
+            filter.type = type;
         }
 
-        if (search) {
+        if (brand) {
+            filter.brand = new RegExp(brand, 'i');
+        }
+
+        if (available !== undefined) {
+            filter.available = available === 'true';
+        }
+
+        if (featured !== undefined) {
+            filter.featured = featured === 'true';
+        }
+
+        // Filtre de prix avec validation
+        if (minPrice || maxPrice) {
+            filter.price = {};
+            if (minPrice) {
+                const min = Number(minPrice);
+                if (!isNaN(min) && min >= 0) {
+                    filter.price.$gte = min;
+                }
+            }
+            if (maxPrice) {
+                const max = Number(maxPrice);
+                if (!isNaN(max) && max >= 0) {
+                    filter.price.$lte = max;
+                }
+            }
+        }
+
+        // Recherche textuelle
+        if (search && search.trim()) {
             filter.$or = [
                 { name: { $regex: search, $options: 'i' } },
                 { brand: { $regex: search, $options: 'i' } },
@@ -62,9 +160,13 @@ const getAllCars = async (req, res) => {
             ];
         }
 
+        // Validation de la pagination
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 10));
+
         const cars = await Car.find(filter)
-            .limit(limit * 1)
-            .skip((page - 1) * limit)
+            .limit(limitNum)
+            .skip((pageNum - 1) * limitNum)
             .sort({ createdAt: -1 });
 
         const total = await Car.countDocuments(filter);
@@ -74,31 +176,41 @@ const getAllCars = async (req, res) => {
             data: cars,
             count: cars.length,
             total,
-            page: parseInt(page),
-            pages: Math.ceil(total / limit),
+            page: pageNum,
+            pages: Math.ceil(total / limitNum),
             pagination: {
                 total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                pages: Math.ceil(total / limit)
+                page: pageNum,
+                limit: limitNum,
+                pages: Math.ceil(total / limitNum)
             }
         });
 
     } catch (error) {
-        console.error('Erreur lors de la récupération des voitures:', error);
+        console.error('❌ Erreur lors de la récupération des voitures:', error);
         res.status(500).json({
             success: false,
             message: 'Erreur serveur lors de la récupération des voitures',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
         });
     }
 };
 
-// @desc    Récupérer une voiture par ID
-// @route   GET /api/cars/:id
-// @access  Public
+/**
+ * @desc    Récupérer une voiture par ID
+ * @route   GET /api/cars/:id
+ * @access  Public
+ */
 const getCarById = async (req, res) => {
     try {
+        // Validation de l'ID
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'ID de voiture invalide'
+            });
+        }
+
         const car = await Car.findById(req.params.id);
 
         if (!car) {
@@ -114,28 +226,37 @@ const getCarById = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Erreur lors de la récupération de la voiture:', error);
-        
-        if (error.kind === 'ObjectId') {
-            return res.status(404).json({
+        console.error('❌ Erreur lors de la récupération de la voiture:', error);
+
+        if (error.kind === 'ObjectId' || error.name === 'CastError') {
+            return res.status(400).json({
                 success: false,
-                message: 'Voiture non trouvée'
+                message: 'ID de voiture invalide'
             });
         }
 
         res.status(500).json({
             success: false,
             message: 'Erreur serveur',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
         });
     }
 };
 
-// @desc    Récupérer une voiture par slug
-// @route   GET /api/cars/slug/:slug
-// @access  Public
+/**
+ * @desc    Récupérer une voiture par slug
+ * @route   GET /api/cars/slug/:slug
+ * @access  Public
+ */
 const getCarBySlug = async (req, res) => {
     try {
+        if (!req.params.slug || !req.params.slug.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Slug invalide'
+            });
+        }
+
         const car = await Car.findOne({ slug: req.params.slug });
 
         if (!car) {
@@ -151,23 +272,27 @@ const getCarBySlug = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Erreur lors de la récupération de la voiture:', error);
+        console.error('❌ Erreur lors de la récupération de la voiture:', error);
         res.status(500).json({
             success: false,
             message: 'Erreur serveur',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
         });
     }
 };
 
-// @desc    Créer une nouvelle voiture
-// @route   POST /api/cars
-// @access  Private/Admin
+/**
+ * @desc    Créer une nouvelle voiture
+ * @route   POST /api/cars
+ * @access  Private/Admin
+ */
 const createCar = async (req, res) => {
     try {
-        console.log('=== 🚗 CREATE CAR START ===');
-        console.log('📦 Request body:', req.body);
-        console.log('📁 Files:', req.files ? req.files.map(f => f.filename) : 'No files');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('=== 🚗 CREATE CAR START ===');
+            console.log('📦 Request body:', req.body);
+            console.log('📁 Files:', req.files ? req.files.map(f => f.filename) : 'No files');
+        }
 
         // Vérification des droits administrateur
         if (req.user && req.user.role !== 'admin') {
@@ -206,6 +331,15 @@ const createCar = async (req, res) => {
             });
         }
 
+        // ✅ Validation du type de voiture
+        if (!isValidCarType(type)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Type de voiture invalide',
+                validTypes: ['Sedan', 'SUV', 'Hatchback', 'Coupe', 'Truck']
+            });
+        }
+
         // Validation du prix
         const priceNumber = Number(price);
         if (isNaN(priceNumber) || priceNumber <= 0) {
@@ -215,10 +349,10 @@ const createCar = async (req, res) => {
             });
         }
 
-        // Parser les spécifications
-        let parsedSpecs;
+        // Parser et valider les spécifications
+        let validatedSpecs;
         try {
-            parsedSpecs = typeof specs === 'string' ? JSON.parse(specs) : (specs || {});
+            validatedSpecs = validateSpecs(specs);
         } catch (parseError) {
             console.error('❌ Specs parsing error:', parseError);
             return res.status(400).json({
@@ -227,23 +361,6 @@ const createCar = async (req, res) => {
                 error: parseError.message
             });
         }
-
-        // Validation des spécifications avec valeurs par défaut
-        const defaultSpecs = {
-            seats: 5,
-            fuel: 'Petrol',
-            transmission: 'Automatic'
-        };
-
-        const validatedSpecs = {
-            seats: Math.max(1, Math.min(50, Number(parsedSpecs.seats) || defaultSpecs.seats)),
-            fuel: ['Petrol', 'Diesel', 'Electric', 'Hybrid'].includes(parsedSpecs.fuel) 
-                ? parsedSpecs.fuel 
-                : defaultSpecs.fuel,
-            transmission: ['Automatic', 'Manual'].includes(parsedSpecs.transmission)
-                ? parsedSpecs.transmission
-                : defaultSpecs.transmission
-        };
 
         // Validation des valeurs numériques
         const validatedRating = Math.min(5, Math.max(0, Number(rating) || 5.0));
@@ -263,22 +380,25 @@ const createCar = async (req, res) => {
             specs: validatedSpecs
         };
 
-        console.log('✅ Car data prepared:', carData);
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Car data prepared:', carData);
+        }
 
         // Gérer les images uploadées
         if (req.files && req.files.length > 0) {
-            const primaryIdx = parseInt(primaryImageIndex) || 0;
+            const primaryIdx = Math.max(0, parseInt(primaryImageIndex) || 0);
             const validPrimaryIndex = Math.min(primaryIdx, req.files.length - 1);
-            
+
             carData.images = req.files.map((file, index) => ({
                 filename: file.filename,
                 alt: `${carData.name} - Image ${index + 1}`,
                 isPrimary: index === validPrimaryIndex
             }));
 
-            console.log('📸 Images processed:', carData.images);
+            if (process.env.NODE_ENV === 'development') {
+                console.log('📸 Images processed:', carData.images);
+            }
         } else {
-            // Si aucune image n'est fournie, retourner une erreur
             return res.status(400).json({
                 success: false,
                 message: 'Au moins une image est requise pour créer une voiture'
@@ -289,11 +409,13 @@ const createCar = async (req, res) => {
         const car = new Car(carData);
         await car.save();
 
-        console.log('✅ Car created successfully:', car._id);
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Car created successfully:', car._id);
+        }
 
-        // Populer la réponse avec les données fraîches
+        // Récupérer la voiture fraîchement créée
         const savedCar = await Car.findById(car._id);
-        
+
         res.status(201).json({
             success: true,
             message: 'Voiture créée avec succès',
@@ -302,7 +424,7 @@ const createCar = async (req, res) => {
 
     } catch (error) {
         console.error('❌ CREATE CAR ERROR:', error);
-        
+
         // Supprimer les fichiers uploadés en cas d'erreur
         if (req.files && req.files.length > 0) {
             const filenames = req.files.map(file => file.filename);
@@ -335,12 +457,11 @@ const createCar = async (req, res) => {
             });
         }
 
-        // Erreur de base de données
         if (error.name === 'MongoError' || error.name === 'MongoServerError') {
             return res.status(500).json({
                 success: false,
                 message: 'Erreur de base de données',
-                error: error.message
+                error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
             });
         }
 
@@ -351,25 +472,39 @@ const createCar = async (req, res) => {
             error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne du serveur'
         });
     } finally {
-        console.log('=== 🏁 CREATE CAR END ===');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('=== 🏁 CREATE CAR END ===');
+        }
     }
 };
 
-// @desc    Mettre à jour une voiture
-// @route   PUT /api/cars/:id
-// @access  Private/Admin
+/**
+ * @desc    Mettre à jour une voiture
+ * @route   PUT /api/cars/:id
+ * @access  Private/Admin
+ */
 const updateCar = async (req, res) => {
     try {
-        console.log('=== 🔄 UPDATE CAR START ===');
-        console.log('📦 Request params:', req.params);
-        console.log('📦 Request body:', req.body);
-        console.log('📁 Files:', req.files ? req.files.map(f => f.filename) : 'No files');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('=== 🔄 UPDATE CAR START ===');
+            console.log('📦 Request params:', req.params);
+            console.log('📦 Request body:', req.body);
+            console.log('📁 Files:', req.files ? req.files.map(f => f.filename) : 'No files');
+        }
 
         // Vérification des droits administrateur
         if (req.user && req.user.role !== 'admin') {
             return res.status(403).json({
                 success: false,
                 message: 'Accès refusé. Droits administrateur requis.'
+            });
+        }
+
+        // Validation de l'ID
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'ID de voiture invalide'
             });
         }
 
@@ -383,7 +518,9 @@ const updateCar = async (req, res) => {
             });
         }
 
-        console.log('✅ Car found:', car._id);
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Car found:', car._id);
+        }
 
         const {
             name,
@@ -422,10 +559,11 @@ const updateCar = async (req, res) => {
         }
 
         if (type !== undefined) {
-            if (!['Sedan', 'SUV', 'Hatchback', 'Coupe', 'Truck'].includes(type)) {
+            if (!isValidCarType(type)) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Type de voiture invalide'
+                    message: 'Type de voiture invalide',
+                    validTypes: ['Sedan', 'SUV', 'Hatchback', 'Coupe', 'Truck']
                 });
             }
             car.type = type;
@@ -508,20 +646,22 @@ const updateCar = async (req, res) => {
             }
 
             if (parsedSpecs.fuel !== undefined) {
-                if (!['Petrol', 'Diesel', 'Electric', 'Hybrid'].includes(parsedSpecs.fuel)) {
+                if (!isValidFuelType(parsedSpecs.fuel)) {
                     return res.status(400).json({
                         success: false,
-                        message: 'Type de carburant invalide'
+                        message: 'Type de carburant invalide',
+                        validFuels: ['Petrol', 'Diesel', 'Electric', 'Hybrid']
                     });
                 }
                 car.specs.fuel = parsedSpecs.fuel;
             }
 
             if (parsedSpecs.transmission !== undefined) {
-                if (!['Automatic', 'Manual'].includes(parsedSpecs.transmission)) {
+                if (!isValidTransmissionType(parsedSpecs.transmission)) {
                     return res.status(400).json({
                         success: false,
-                        message: 'Type de transmission invalide'
+                        message: 'Type de transmission invalide',
+                        validTransmissions: ['Automatic', 'Manual']
                     });
                 }
                 car.specs.transmission = parsedSpecs.transmission;
@@ -532,11 +672,18 @@ const updateCar = async (req, res) => {
         if (imagesToDelete) {
             let imagesToDeleteArray;
             try {
-                imagesToDeleteArray = typeof imagesToDelete === 'string' 
-                    ? JSON.parse(imagesToDelete) 
+                imagesToDeleteArray = typeof imagesToDelete === 'string'
+                    ? JSON.parse(imagesToDelete)
                     : imagesToDelete;
             } catch (parseError) {
                 console.error('❌ imagesToDelete parsing error:', parseError);
+                
+                // ✅ Nettoyer les nouveaux fichiers uploadés si erreur de parsing
+                if (req.files && req.files.length > 0) {
+                    const filenames = req.files.map(file => file.filename);
+                    await deleteImageFiles(filenames).catch(err => console.error(err));
+                }
+                
                 return res.status(400).json({
                     success: false,
                     message: 'Format des images à supprimer invalide'
@@ -544,15 +691,20 @@ const updateCar = async (req, res) => {
             }
 
             if (Array.isArray(imagesToDeleteArray) && imagesToDeleteArray.length > 0) {
-                console.log('🗑️ Deleting images:', imagesToDeleteArray);
-                
+                if (process.env.NODE_ENV === 'development') {
+                    console.log('🗑️ Deleting images:', imagesToDeleteArray);
+                }
+
                 // Supprimer les fichiers physiques
                 await deleteImageFiles(imagesToDeleteArray);
-                
+
                 // Supprimer les images de la base de données
                 const initialImageCount = car.images.length;
                 car.images = car.images.filter(img => !imagesToDeleteArray.includes(img.filename));
-                console.log(`✅ Images deleted: ${initialImageCount - car.images.length}`);
+                
+                if (process.env.NODE_ENV === 'development') {
+                    console.log(`✅ Images deleted: ${initialImageCount - car.images.length}`);
+                }
             }
         }
 
@@ -560,11 +712,10 @@ const updateCar = async (req, res) => {
         if (req.files && req.files.length > 0) {
             const totalExistingImages = car.images.length;
             const primaryIdx = parseInt(primaryImageIndex) || 0;
-            
-            // Valider que l'index principal est valide
+
             const totalImagesAfterAdd = totalExistingImages + req.files.length;
             const validPrimaryIndex = Math.min(Math.max(0, primaryIdx), totalImagesAfterAdd - 1);
-            
+
             const newImages = req.files.map((file, index) => ({
                 filename: file.filename,
                 alt: `${car.name} - Image ${totalExistingImages + index + 1}`,
@@ -572,11 +723,14 @@ const updateCar = async (req, res) => {
             }));
 
             car.images.push(...newImages);
-            console.log(`✅ ${newImages.length} new images added`);
+            
+            if (process.env.NODE_ENV === 'development') {
+                console.log(`✅ ${newImages.length} new images added`);
+            }
         }
 
         // Réorganiser les images primaires si nécessaire
-        if (primaryImageIndex !== undefined) {
+        if (primaryImageIndex !== undefined && !req.files) {
             const primaryIdx = parseInt(primaryImageIndex);
             if (isNaN(primaryIdx) || primaryIdx < 0 || primaryIdx >= car.images.length) {
                 return res.status(400).json({
@@ -588,7 +742,10 @@ const updateCar = async (req, res) => {
             car.images.forEach((img, index) => {
                 img.isPrimary = index === primaryIdx;
             });
-            console.log(`⭐ Primary image set to index: ${primaryIdx}`);
+            
+            if (process.env.NODE_ENV === 'development') {
+                console.log(`⭐ Primary image set to index: ${primaryIdx}`);
+            }
         }
 
         // Valider qu'il reste au moins une image
@@ -602,15 +759,19 @@ const updateCar = async (req, res) => {
         // S'assurer qu'une seule image est marquée comme primaire
         const primaryImages = car.images.filter(img => img.isPrimary);
         if (primaryImages.length !== 1) {
-            // Si aucune ou plusieurs images primaires, définir la première comme primaire
             car.images.forEach((img, index) => {
                 img.isPrimary = index === 0;
             });
-            console.log('🔄 Auto-corrected primary image to index 0');
+            if (process.env.NODE_ENV === 'development') {
+                console.log('🔄 Auto-corrected primary image to index 0');
+            }
         }
 
         await car.save();
-        console.log('✅ Car updated successfully:', car._id);
+        
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Car updated successfully:', car._id);
+        }
 
         // Récupérer la voiture fraîchement mise à jour
         const updatedCar = await Car.findById(car._id);
@@ -623,7 +784,7 @@ const updateCar = async (req, res) => {
 
     } catch (error) {
         console.error('❌ UPDATE CAR ERROR:', error);
-        
+
         // Supprimer les nouveaux fichiers uploadés en cas d'erreur
         if (req.files && req.files.length > 0) {
             const filenames = req.files.map(file => file.filename);
@@ -670,18 +831,24 @@ const updateCar = async (req, res) => {
             error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne du serveur'
         });
     } finally {
-        console.log('=== 🏁 UPDATE CAR END ===');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('=== 🏁 UPDATE CAR END ===');
+        }
     }
 };
 
-// @desc    Supprimer une voiture
-// @route   DELETE /api/cars/:id
-// @access  Private/Admin
+/**
+ * @desc    Supprimer une voiture
+ * @route   DELETE /api/cars/:id
+ * @access  Private/Admin
+ */
 const deleteCar = async (req, res) => {
     try {
-        console.log('=== 🗑️ DELETE CAR START ===');
-        console.log('📦 Request params:', req.params);
-        
+        if (process.env.NODE_ENV === 'development') {
+            console.log('=== 🗑️ DELETE CAR START ===');
+            console.log('📦 Request params:', req.params);
+        }
+
         // Vérification des droits administrateur
         if (req.user && req.user.role !== 'admin') {
             return res.status(403).json({
@@ -709,14 +876,16 @@ const deleteCar = async (req, res) => {
             });
         }
 
-        console.log('✅ Car found for deletion:', {
-            id: car._id,
-            name: car.name,
-            brand: car.brand,
-            imageCount: car.images ? car.images.length : 0
-        });
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Car found for deletion:', {
+                id: car._id,
+                name: car.name,
+                brand: car.brand,
+                imageCount: car.images ? car.images.length : 0
+            });
+        }
 
-        // Vérifier s'il y a des réservations associées à cette voiture
+        // Vérifier s'il y a des réservations associées
         try {
             const Booking = require('../models/Booking');
             const activeBookings = await Booking.find({
@@ -740,25 +909,30 @@ const deleteCar = async (req, res) => {
         // Supprimer les fichiers d'images
         if (car.images && car.images.length > 0) {
             const filenames = car.images.map(img => img.filename);
-            console.log('🗑️ Deleting image files:', filenames);
             
+            if (process.env.NODE_ENV === 'development') {
+                console.log('🗑️ Deleting image files:', filenames);
+            }
+
             try {
                 await deleteImageFiles(filenames);
-                console.log(`✅ Successfully deleted ${filenames.length} image file(s)`);
+                if (process.env.NODE_ENV === 'development') {
+                    console.log(`✅ Successfully deleted ${filenames.length} image file(s)`);
+                }
             } catch (fileError) {
                 console.error('❌ Error deleting image files:', fileError);
                 // Continuer la suppression même si les fichiers images ne peuvent pas être supprimés
-                // On log l'erreur mais on ne bloque pas la suppression de la voiture
             }
         } else {
-            console.log('ℹ️ No images to delete for this car');
+            if (process.env.NODE_ENV === 'development') {
+                console.log('ℹ️ No images to delete for this car');
+            }
         }
 
         // Supprimer la voiture de la base de données
         const deletionResult = await Car.findByIdAndDelete(req.params.id);
-        
+
         if (!deletionResult) {
-            // Ce cas ne devrait normalement pas se produire car on a déjà vérifié l'existence
             return res.status(404).json({
                 success: false,
                 message: 'Voiture non trouvée lors de la suppression',
@@ -766,13 +940,15 @@ const deleteCar = async (req, res) => {
             });
         }
 
-        console.log('✅ Car deleted successfully from database');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Car deleted successfully from database');
+        }
 
-        // Optionnel: Nettoyer les réservations associées (si elles existent)
+        // Optionnel: Nettoyer les réservations associées
         try {
             const Booking = require('../models/Booking');
             const deletedBookings = await Booking.deleteMany({ car: req.params.id });
-            if (deletedBookings.deletedCount > 0) {
+            if (deletedBookings.deletedCount > 0 && process.env.NODE_ENV === 'development') {
                 console.log(`✅ Deleted ${deletedBookings.deletedCount} associated booking(s)`);
             }
         } catch (cleanupError) {
@@ -792,7 +968,7 @@ const deleteCar = async (req, res) => {
 
     } catch (error) {
         console.error('❌ DELETE CAR ERROR:', error);
-        
+
         // Gestion spécifique des erreurs MongoDB
         if (error.name === 'CastError') {
             return res.status(400).json({
@@ -803,7 +979,6 @@ const deleteCar = async (req, res) => {
         }
 
         if (error.name === 'MongoError' || error.name === 'MongoServerError') {
-            // Erreurs spécifiques à MongoDB
             if (error.code === 11000) {
                 return res.status(400).json({
                     success: false,
@@ -811,11 +986,11 @@ const deleteCar = async (req, res) => {
                     error: error.message
                 });
             }
-            
+
             return res.status(500).json({
                 success: false,
                 message: 'Erreur de base de données',
-                error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur lors de l\'opération de base de données'
+                error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
             });
         }
 
@@ -828,11 +1003,9 @@ const deleteCar = async (req, res) => {
             });
         }
 
-        // Erreur de système de fichiers (suppression d'images)
-        if (error.code && error.code.startsWith('ENOENT') || error.message.includes('ENOENT')) {
+        // Erreur de système de fichiers
+        if (error.code && (error.code.startsWith('ENOENT') || error.message.includes('ENOENT'))) {
             console.warn('⚠️ File system error (files may not exist):', error.message);
-            // On continue car les fichiers peuvent avoir déjà été supprimés
-            // On renvoie quand même un succès mais avec un avertissement
             return res.json({
                 success: true,
                 message: 'Voiture supprimée (certains fichiers images n\'ont pas pu être supprimés)',
@@ -848,17 +1021,24 @@ const deleteCar = async (req, res) => {
             ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
         });
     } finally {
-        console.log('=== 🏁 DELETE CAR END ===');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('=== 🏁 DELETE CAR END ===');
+        }
     }
 };
 
-// @desc    Récupérer les voitures en vedette
-// @route   GET /api/cars/featured
-// @access  Public
+/**
+ * @desc    Récupérer les voitures en vedette
+ * @route   GET /api/cars/featured
+ * @access  Public
+ */
 const getFeaturedCars = async (req, res) => {
     try {
+        const { limit = 6 } = req.query;
+        const limitNum = Math.max(1, Math.min(20, parseInt(limit) || 6));
+
         const cars = await Car.find({ featured: true, available: true })
-            .limit(6)
+            .limit(limitNum)
             .sort({ createdAt: -1 });
 
         res.json({
@@ -868,36 +1048,43 @@ const getFeaturedCars = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Erreur lors de la récupération des voitures en vedette:', error);
+        console.error('❌ Erreur lors de la récupération des voitures en vedette:', error);
         res.status(500).json({
             success: false,
             message: 'Erreur serveur',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
         });
     }
 };
 
-// @desc    Récupérer les types de voitures disponibles
-// @route   GET /api/cars/types
-// @access  Public
+/**
+ * @desc    Récupérer les types de voitures disponibles
+ * @route   GET /api/cars/types
+ * @access  Public
+ */
 const getCarTypes = async (req, res) => {
     try {
         const types = await Car.distinct('type', { available: true });
-        
+
         res.json({
             success: true,
-            data: types
+            data: types,
+            count: types.length
         });
 
     } catch (error) {
-        console.error('Erreur lors de la récupération des types:', error);
+        console.error('❌ Erreur lors de la récupération des types:', error);
         res.status(500).json({
             success: false,
             message: 'Erreur serveur',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne'
         });
     }
 };
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
 
 module.exports = {
     getAllCars,
