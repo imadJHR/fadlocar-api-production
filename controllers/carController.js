@@ -2,6 +2,17 @@ const Car = require('../models/Car');
 const fs = require('fs').promises;
 const path = require('path');
 
+// ✅ Helper to safely slugify car names
+const slugify = (text) =>
+  text
+    .toString()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w\-]+/g, '')
+    .replace(/\-\-+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+
 // Helper function to get base URL from request
 const getBaseUrl = (req) => {
   return `${req.protocol}://${req.get('host')}`;
@@ -128,9 +139,10 @@ const validatePrice = (price) => {
   return priceNum;
 };
 
-// @desc    Create a new car
-// @route   POST /api/cars
-// @access  Private (Admin)
+// ======================================================================
+// 🟢 CREATE A NEW CAR
+// @route POST /api/cars
+// ======================================================================
 exports.createCar = async (req, res) => {
   let uploadedFiles = [];
 
@@ -140,9 +152,18 @@ exports.createCar = async (req, res) => {
     console.log('📁 Files:', req.files);
 
     const {
-      name, brand, rating, reviews, available,
-      featured, type, price, description,
-      seats, fuel, transmission,
+      name,
+      brand,
+      rating,
+      reviews,
+      available,
+      featured,
+      type,
+      price,
+      description,
+      seats,
+      fuel,
+      transmission,
       primaryImageIndex
     } = req.body;
 
@@ -158,19 +179,13 @@ exports.createCar = async (req, res) => {
     const validatedPrice = validatePrice(price);
 
     // Validate images
-    validateImageFiles(req.files);
+    if (req.files) {
+      validateImageFiles(req.files);
+    }
 
     const baseUrl = getBaseUrl(req);
     const primaryIndex = parseInt(primaryImageIndex) || 0;
 
-    // Process uploaded images
-    const images = req.files.images.map((file, index) =>
-      createImageObject(file, baseUrl, index === primaryIndex)
-    );
-
-    uploadedFiles = images.map(img => img.filename);
-
-    // Create car data
     const carData = {
       name: name.trim(),
       brand: brand.trim(),
@@ -181,15 +196,31 @@ exports.createCar = async (req, res) => {
       description: description.trim(),
       rating: rating ? Math.min(5, Math.max(0, Number(rating))) : 5.0,
       reviews: reviews ? Math.max(0, Number(reviews)) : 0,
+      slug: slugify(`${brand}-${name}`),
       specs: {
         seats: seats ? Math.max(1, Math.min(50, Number(seats))) : 5,
         fuel: fuel || 'Petrol',
         transmission: transmission || 'Automatic',
-      },
-      images
+      }
     };
 
-    console.log(`✅ Processing ${images.length} images. Primary: index ${primaryIndex}`);
+    // Handle uploaded files
+    if (req.files) {
+      // Process uploaded images
+      if (req.files.images && req.files.images.length > 0) {
+        const images = req.files.images.map((file, index) =>
+          createImageObject(file, baseUrl, index === primaryIndex)
+        );
+        uploadedFiles = images.map(img => img.filename);
+        carData.images = images;
+        console.log(`✅ Processing ${images.length} images. Primary: index ${primaryIndex}`);
+      }
+
+      // Handle thumbnail
+      if (req.files.thumbnail && req.files.thumbnail[0]) {
+        carData.thumbnail = createImageObject(req.files.thumbnail[0], baseUrl, false);
+      }
+    }
 
     // Create car
     const car = await Car.create(carData);
@@ -237,9 +268,10 @@ exports.createCar = async (req, res) => {
   }
 };
 
-// @desc    Get all cars
-// @route   GET /api/cars
-// @access  Public
+// ======================================================================
+// 🟢 GET ALL CARS
+// @route GET /api/cars
+// ======================================================================
 exports.getCars = async (req, res) => {
   try {
     console.log('📋 Getting all cars');
@@ -299,9 +331,10 @@ exports.getCars = async (req, res) => {
   }
 };
 
-// @desc    Get car by Slug
-// @route   GET /api/cars/slug/:slug
-// @access  Public
+// ======================================================================
+// 🟢 GET CAR BY SLUG
+// @route GET /api/cars/slug/:slug
+// ======================================================================
 exports.getCarBySlug = async (req, res) => {
   try {
     const { slug } = req.params;
@@ -335,9 +368,10 @@ exports.getCarBySlug = async (req, res) => {
   }
 };
 
-// @desc    Get car by ID
-// @route   GET /api/cars/:id
-// @access  Public
+// ======================================================================
+// 🟢 GET CAR BY ID
+// @route GET /api/cars/:id
+// ======================================================================
 exports.getCarById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -379,9 +413,10 @@ exports.getCarById = async (req, res) => {
   }
 };
 
-// @desc    Update a car
-// @route   PUT /api/cars/:id
-// @access  Private (Admin)
+// ======================================================================
+// 🟡 UPDATE CAR
+// @route PUT /api/cars/:id
+// ======================================================================
 exports.updateCar = async (req, res) => {
   let newUploadedFiles = [];
 
@@ -437,6 +472,11 @@ exports.updateCar = async (req, res) => {
     if (available !== undefined) car.available = available === 'true' || available === true;
     if (featured !== undefined) car.featured = featured === 'true' || featured === true;
 
+    // Update slug if name or brand changed
+    if (name !== undefined || brand !== undefined) {
+      car.slug = slugify(`${car.brand}-${car.name}`);
+    }
+
     // Handle image deletion first
     if (imagesToDelete) {
       let imagesToDeleteArray;
@@ -481,8 +521,19 @@ exports.updateCar = async (req, res) => {
       console.log(`✅ Added ${newImages.length} new images`);
     }
 
+    // Handle thumbnail upload
+    if (req.files && req.files.thumbnail && req.files.thumbnail[0]) {
+      // Delete old thumbnail file if exists
+      if (car.thumbnail && car.thumbnail.filename) {
+        await deleteImageFiles([car.thumbnail.filename]);
+      }
+      
+      car.thumbnail = createImageObject(req.files.thumbnail[0], baseUrl, false);
+      console.log('✅ Thumbnail updated');
+    }
+
     // Validate that at least one image exists
-    if (car.images.length === 0) {
+    if (car.images.length === 0 && !car.thumbnail) {
       // Delete newly uploaded files if no images remain
       if (newUploadedFiles.length > 0) {
         await deleteImageFiles(newUploadedFiles);
@@ -507,12 +558,14 @@ exports.updateCar = async (req, res) => {
         console.log(`✅ Primary image set: ${car.images[primaryIndex].filename}`);
       } else {
         console.log(`⚠️ Invalid primary index ${primaryIndex}, using first image`);
-        car.images[0].isPrimary = true;
+        if (car.images.length > 0) {
+          car.images[0].isPrimary = true;
+        }
       }
     }
 
     // Ensure there's always a primary image
-    if (!car.images.some(img => img.isPrimary)) {
+    if (car.images.length > 0 && !car.images.some(img => img.isPrimary)) {
       car.images[0].isPrimary = true;
       console.log('⭐ Set first image as primary (fallback)');
     }
@@ -563,9 +616,10 @@ exports.updateCar = async (req, res) => {
   }
 };
 
-// @desc    Delete a car
-// @route   DELETE /api/cars/:id
-// @access  Private (Admin)
+// ======================================================================
+// 🔴 DELETE CAR
+// @route DELETE /api/cars/:id
+// ======================================================================
 exports.deleteCar = async (req, res) => {
   try {
     const { id } = req.params;
@@ -591,6 +645,10 @@ exports.deleteCar = async (req, res) => {
 
     // Delete associated image files
     const filesToDelete = car.images?.map(img => img.filename).filter(Boolean) || [];
+    if (car.thumbnail && car.thumbnail.filename) {
+      filesToDelete.push(car.thumbnail.filename);
+    }
+    
     console.log(`🗑️ Deleting ${filesToDelete.length} image files`);
 
     await deleteImageFiles(filesToDelete);
@@ -615,9 +673,10 @@ exports.deleteCar = async (req, res) => {
   }
 };
 
-// @desc    Get related cars
-// @route   GET /api/cars/related/:type/:currentCarSlug
-// @access  Public
+// ======================================================================
+// 🟢 GET RELATED CARS
+// @route GET /api/cars/related/:type/:currentCarSlug
+// ======================================================================
 exports.getRelatedCars = async (req, res) => {
   try {
     const { type, currentCarSlug } = req.params;
@@ -652,9 +711,7 @@ exports.getRelatedCars = async (req, res) => {
   }
 };
 
-// @desc    Get available cars
-// @route   GET /api/cars/available
-// @access  Public
+// Additional methods from the first version that might be useful
 exports.getAvailableCars = async (req, res) => {
   try {
     console.log('🔍 Getting available cars');
@@ -692,9 +749,6 @@ exports.getAvailableCars = async (req, res) => {
   }
 };
 
-// @desc    Get featured cars
-// @route   GET /api/cars/featured
-// @access  Public
 exports.getFeaturedCars = async (req, res) => {
   try {
     console.log('🔍 Getting featured cars');
@@ -723,169 +777,6 @@ exports.getFeaturedCars = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error retrieving featured cars'
-    });
-  }
-};
-
-// @desc    Search cars
-// @route   GET /api/cars/search
-// @access  Public
-exports.searchCars = async (req, res) => {
-  try {
-    const {
-      query, type, fuel, transmission,
-      minPrice, maxPrice, available, featured,
-      page = 1, limit = 10, sort = '-createdAt'
-    } = req.query;
-
-    console.log('🔍 Searching cars with filters:', req.query);
-
-    let searchCriteria = {};
-
-    // Text search
-    if (query) {
-      searchCriteria.$or = [
-        { name: { $regex: query, $options: 'i' } },
-        { brand: { $regex: query, $options: 'i' } },
-        { description: { $regex: query, $options: 'i' } }
-      ];
-    }
-
-    // Filters
-    if (type) searchCriteria.type = type;
-    if (fuel) searchCriteria['specs.fuel'] = fuel;
-    if (transmission) searchCriteria['specs.transmission'] = transmission;
-    if (available !== undefined) searchCriteria.available = available === 'true';
-    if (featured !== undefined) searchCriteria.featured = featured === 'true';
-
-    // Price range
-    if (minPrice || maxPrice) {
-      searchCriteria.price = {};
-      if (minPrice) searchCriteria.price.$gte = Number(minPrice);
-      if (maxPrice) searchCriteria.price.$lte = Number(maxPrice);
-    }
-
-    const skip = (Number(page) - 1) * Number(limit);
-
-    const cars = await Car.find(searchCriteria)
-      .sort(sort)
-      .skip(skip)
-      .limit(Number(limit));
-
-    const total = await Car.countDocuments(searchCriteria);
-    const baseUrl = getBaseUrl(req);
-    const carsFormatted = cars.map(car => formatCarData(car, baseUrl));
-
-    console.log(`✅ ${cars.length} cars found with search criteria`);
-
-    res.status(200).json({
-      success: true,
-      data: carsFormatted,
-      pagination: {
-        total,
-        page: Number(page),
-        limit: Number(limit),
-        pages: Math.ceil(total / Number(limit))
-      }
-    });
-  } catch (error) {
-    console.error('❌ SEARCH CARS ERROR:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error searching cars'
-    });
-  }
-};
-
-// @desc    Get car statistics
-// @route   GET /api/cars/stats
-// @access  Public
-exports.getCarStats = async (req, res) => {
-  try {
-    console.log('📊 Getting car statistics');
-
-    const totalCars = await Car.countDocuments();
-    const availableCars = await Car.countDocuments({ available: true });
-    const featuredCars = await Car.countDocuments({ featured: true });
-
-    const mostExpensiveCar = await Car.findOne()
-      .sort({ price: -1 })
-      .select('name brand price slug thumbnail images');
-
-    const topRatedCar = await Car.findOne()
-      .sort({ rating: -1, reviews: -1 })
-      .select('name brand rating reviews slug thumbnail images');
-
-    const statsByType = await Car.aggregate([
-      {
-        $group: {
-          _id: '$type',
-          count: { $sum: 1 },
-          avgPrice: { $avg: '$price' },
-          avgRating: { $avg: '$rating' }
-        }
-      },
-      {
-        $project: {
-          type: '$_id',
-          _id: 0,
-          count: 1,
-          avgPrice: { $round: ['$avgPrice', 2] },
-          avgRating: { $round: ['$avgRating', 1] }
-        }
-      },
-      {
-        $sort: { count: -1 }
-      }
-    ]);
-
-    const statsByFuel = await Car.aggregate([
-      {
-        $group: {
-          _id: '$specs.fuel',
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $project: {
-          fuel: '$_id',
-          _id: 0,
-          count: 1
-        }
-      },
-      {
-        $sort: { count: -1 }
-      }
-    ]);
-
-    const baseUrl = getBaseUrl(req);
-
-    const stats = {
-      overview: {
-        total: totalCars,
-        available: availableCars,
-        unavailable: totalCars - availableCars,
-        featured: featuredCars
-      },
-      highlights: {
-        mostExpensive: mostExpensiveCar ? formatCarData(mostExpensiveCar, baseUrl) : null,
-        topRated: topRatedCar ? formatCarData(topRatedCar, baseUrl) : null
-      },
-      breakdown: {
-        byType: statsByType,
-        byFuel: statsByFuel
-      }
-    };
-    console.log('✅ Statistics retrieved successfully');
-    res.status(200).json({
-      success: true,
-      data: stats
-    });
-  } catch (error) {
-    console.error('❌ GET CAR STATS ERROR:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error retrieving statistics'
     });
   }
 };
