@@ -32,7 +32,7 @@ app.get('/', (req, res) => {
   `);
 });
 
-// --- Static Uploads (⚠️ Not persistent on Vercel) ---
+// --- Static Uploads (⚠️ Not persistent on Vercel)---
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // --- API Routes ---
@@ -40,7 +40,7 @@ app.use('/api/cars', carRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/blog', blogRoutes);
-app.use('/api/users', userRoutes);
+app.use("/api/users", require("./routes/userRoutes"));
 app.use('/api/stats', statsRoutes);
 
 // --- Database Connection & Server Start ---
