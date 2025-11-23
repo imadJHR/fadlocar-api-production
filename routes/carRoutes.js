@@ -170,5 +170,6 @@ router.put(
 );
 
 router.delete('/:id', protect, deleteCar);
+router.get('/search', searchCars);
 
 module.exports = router;

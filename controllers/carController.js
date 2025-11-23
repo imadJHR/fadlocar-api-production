@@ -780,3 +780,28 @@ exports.getFeaturedCars = async (req, res) => {
     });
   }
 };
+
+exports.searchCars = async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) return res.status(400).json({ success: false, message: 'Search query is required' });
+
+    const regex = new RegExp(q, 'i');
+    const cars = await Car.find({
+      $or: [
+        { name: regex },
+        { brand: regex },
+        { description: regex },
+        { type: regex }
+      ]
+    });
+
+    const baseUrl = getBaseUrl(req);
+    const formatted = cars.map(c => formatCarData(c, baseUrl));
+
+    res.status(200).json({ success: true, count: formatted.length, data: formatted });
+  } catch (err) {
+    console.error('❌ SEARCH CARS ERROR:', err);
+    res.status(500).json({ success: false, message: 'Server error while searching cars' });
+  }
+};
